@@ -1,34 +1,102 @@
 # Boot Upgrade Agent
 
-An agent that upgrades a **Spring Boot 2.7** app to **Spring Boot 3** using a small **open-weight** model running locally, and proves the result by running the app's own test suite.
+[![CI](https://github.com/Ishika-eng/Hacktoberfest_26/actions/workflows/ci.yml/badge.svg)](https://github.com/Ishika-eng/Hacktoberfest_26/actions/workflows/ci.yml)
+
+An agent that upgrades a **Spring Boot 2.7** app to **Spring Boot 3** with a local **open-weight** model, then checks that the upgrade did not silently change who can access what.
 
 Built for the *Best Open-Source AI Project* challenge at Hacktoberfest 2026 (project type: **model harness**).
 
 ## The problem
 
-Spring Boot 2.x no longer gets open-source security fixes, but upgrading to 3.x is a breaking change: `javax.*` becomes `jakarta.*`, and APIs such as `WebSecurityConfigurerAdapter` are removed, so the Spring Security configuration has to be rewritten. Mechanical tools handle part of this. Engineers still fix the leftovers by hand, which is why the upgrade keeps getting postponed.
+Many companies still run Spring Boot 2.x, which no longer gets open-source security fixes. Upgrading to Boot 3 breaks code (`javax` to `jakarta`, removed APIs such as `WebSecurityConfigurerAdapter`) and, worse, can silently change security behaviour. Automated tools handle the mechanical changes, but engineers spend weeks on the leftovers and on verifying that nothing was exposed, so upgrades keep getting postponed.
 
-## What it does
+## The solution
 
+The agent runs OpenRewrite first, then builds and tests. It sends each compile error or test failure, with the relevant code, to an open-weight model, applies the fix and retests, up to a few attempts. It then replays the same HTTP requests against the old and the new build, as anonymous, user and admin, and flags every endpoint whose answer changed. Anything it cannot fix is flagged for a human, with a model-written diagnosis. The output is a Boot 3 app and a report of what changed and why.
+
+**Why open-weight:** the model runs on the company's own machine, so proprietary code never leaves it.
+
+## What is implemented
+
+| Capability | Status |
+|---|---|
+| OpenRewrite `UpgradeSpringBoot_3_3` first, with a small built-in fallback if it fails | Done |
+| Build and test loop; the model fixes files from compile errors, test failures and Spring startup failures | Done |
+| Deterministic import repair (wrong, missing or unused imports) before spending a model call | Done |
+| Test-integrity guard: the agent can only write under `src/main`, test files are hashed and a changed test invalidates the run | Done |
+| Regression rollback: a round that scores worse is reverted, and a rejected attempt is shown to the model so it does not repeat it | Done |
+| Reject model replies that answer about the wrong file | Done |
+| Per-round prompts and replies saved to `runs/` | Done |
+| Security equivalence check: same requests as anonymous / user / admin against the old and new build | Done, for the endpoints listed in the app's `endpoints.json` (not auto-discovered) |
+| Known-advisory counts before and after (`--cve-scan`, uses osv.dev) | Done, opt-in; counts advisories, does not patch dependencies itself |
+| Model-written diagnosis for failures and security differences | Done; labelled unverified |
+| Java 17+ check with a clear error | Done |
+| Two sample apps and a benchmark ([BENCHMARK.md](BENCHMARK.md)) | Done |
+| Gradle support | Not yet |
+| Auto-discovering endpoints for the security check | Not yet |
+| Demo video | Not yet |
+
+## How it works
+
+```mermaid
+flowchart TD
+    A[Spring Boot 2.7 app] --> B[Copy to a work dir<br/>the original is never touched]
+    B --> C[OpenRewrite UpgradeSpringBoot_3_3<br/>fallback: built-in upgrade]
+    C --> D[mvn test]
+    D -->|green| G[Security equivalence check<br/>old build vs new build]
+    D -->|red| E{Import problem?}
+    E -->|yes| F[Fix import directly<br/>no model call]
+    F --> D
+    E -->|no| H[Open-weight model fixes the file<br/>error + original + failing tests + cheat sheet]
+    H --> D
+    D -.->|worse than the best so far| R[Roll back to the best state]
+    R -.-> H
+    G --> I[Report, with anything left for a human]
 ```
-Spring Boot 2.7 app
-   │
-   ▼  1. mechanical upgrade (parent version bump, javax -> jakarta)
-   ▼  2. mvn test
-   │        ├─ passes ──► write report
-   │        └─ fails
-   ▼  3. missing import? fix it deterministically (like an IDE auto-import)
-   ▼  4. otherwise send the error, the broken file, the ORIGINAL file, the source
-   │     of the failing tests and a migration cheat sheet to an open-weight
-   │     model (via Ollama, on your machine)
-   ▼  5. write the model's fixed file, go back to 2 (max 5 fix rounds)
-   ▼
-   Report: diff, test result, and anything left for a human
-```
 
-The model only ever sees the failing file, its original version, the error and the failing tests, never the whole repo. Company code never leaves the machine, which is the point of using an open-weight model.
+The model sees only the failing file, its original version, the errors for that file, the failing tests and the cheat sheet in [`agent/cheatsheet/`](agent/cheatsheet) (one file per topic), never the whole repo.
 
-The mechanical step in `agent/migrate.py` is a small stand-in for [OpenRewrite](https://docs.openrewrite.org/), which has official Spring Boot 3 recipes. Swapping it in is the obvious next step.
+## Results
+
+Measured on an 18 GB Apple Silicon laptop with everything local (Ollama). Three runs per model per app (DeepSeek was stopped early, see below); the full table, hardware and per-run reports are in [BENCHMARK.md](BENCHMARK.md) and [`reports/benchmark/`](reports/benchmark).
+
+| App | Setup | Runs passed | Tests passed | Model rounds | Time per run | Security differences |
+|---|---|---|---|---|---|---|
+| `sample-app` (11 tests) | OpenRewrite alone | 0/1 | does not compile | 0 | 11 s | n/a |
+| `sample-app` | **Qwen2.5-Coder 7B + agent** | **3/3** | 11/11 each run | 2 | 62–65 s | 0 of 18 checks |
+| `sample-app` | DeepSeek-Coder 6.7B + agent | 0/2 | 8/11, 8/11 | 5 | 260 s and 863 s | 10 of 18 checks, both runs |
+| `sample-jpa-app` (8 tests) | OpenRewrite alone | 0/1 | does not compile | 0 | 11 s | n/a |
+| `sample-jpa-app` | **Qwen2.5-Coder 7B + agent** | **3/3** | 8/8 each run | 1 | 65–67 s | 2 of 24 checks, the same 2 every run |
+| `sample-jpa-app` | DeepSeek-Coder 6.7B + agent | 0/1 | 3/8 | 5 | 223 s | 16 of 24 checks |
+
+What this shows:
+
+- **OpenRewrite alone is not enough.** It converts the `javax` imports and most of the security chain, but it cannot rewrite `WebSecurityConfigurerAdapter` (it leaves a "migrate manually" marker) or Hibernate 6's removed `@Type(type=...)`. Neither sample app compiles afterwards, so no tests run.
+- **With the agent, Qwen2.5-Coder 7B finishes both upgrades** in about a minute, passing every test, in all six runs. It rewrites the security config into a `SecurityFilterChain` bean (plus the user store and `AuthenticationManager` bean in `sample-app`) and replaces the `@Type` mapping in `sample-jpa-app`.
+- **Green tests are not the whole story.** On `sample-jpa-app` all 8 tests pass, yet `GET /products/` (with a trailing slash) goes from **200 to 404** for logged-in users, because Spring 6 stopped matching trailing slashes. No test covers it. The security equivalence check finds it every time and the report flags it for a human instead of reporting a clean pass.
+
+| Endpoint (`sample-jpa-app`) | anonymous | clerk | manager |
+|---|---|---|---|
+| `GET /products` | 401 | 200 | 200 |
+| `GET /products/` | 401 | **200 → 404** | **200 → 404** |
+
+**DeepSeek-Coder 6.7B did not finish either app, and its benchmark was stopped early on purpose.** After two runs on `sample-app` (both 8/11) and one on `sample-jpa-app` (3/8) it was clearly not converging, and each run takes 4 to 14 minutes, so the remaining runs were skipped. The three finished runs are reported above as they came out. Its upgraded apps answer 10 of 18 and 16 of 24 requests differently from the Boot 2.7 build (requests that used to give 200 or 401 now give 403), so the security check confirms what the failing tests show.
+
+Do not read this as "DeepSeek cannot do it". There are two causes. The model rewrites the security config with `httpBasic(AbstractHttpConfigurer::disable)`, which turns HTTP Basic off. And there is a **known weakness in the agent that is not fixed**: when the build compiles but tests fail, it picks the files to fix from the stack trace. DeepSeek's later rounds went to `ApiController`, `DemoApplication`, `Order` and `ShopApplication`, which were not the problem, and it never got another chance at `SecurityConfig`. Fixing that file choice is the first thing to try, and the Qwen numbers would need rerunning with it.
+
+How to read these results fairly:
+
+- The harness was tuned after watching models fail on these two apps. An earlier benchmark run had Qwen fail `sample-jpa-app` after writing one class into another file's source. That led to per-file error messages and the check that rejects a reply for the wrong file. The numbers above are after those changes, so they measure the harness plus the model, and the cheat sheet entries target exactly these apps.
+- Three runs per cell is a small sample, and models are not perfectly repeatable even at temperature 0.
+- Two small apps are not your codebase. Treat this as evidence that the approach works, not as a guarantee.
+
+## Safety
+
+- The agent works on a **copy**; your original app is never modified.
+- It **cannot edit tests**: writes are limited to `src/main`, and test files are hashed after the upgrade tool runs and again at the end. A changed test makes the run exit with code 2 and the report says `INVALID`. If the upgrade tool itself rewrites a test file, the report lists it.
+- **Every output needs human review.** Passing tests only proves what the tests cover. The security check only covers the endpoints and roles you list.
+- `--cve-scan` is opt-in because it sends dependency names and versions (not source code) to api.osv.dev.
+- The model's diagnosis is generated text and is labelled unverified in the report.
 
 ## Models used
 
@@ -41,73 +109,68 @@ The mechanical step in `agent/migrate.py` is a small stand-in for [OpenRewrite](
 - **DeepSeek-Coder** is open-weight under a custom licence. Commercial use is allowed, but the licence has use restrictions (for example no military use and no harmful or fully automated decisions) that must be passed on to anyone you redistribute the model or derivatives to. It is governed by PRC law.
 - Licence details were read from the model cards on 22 Oct 2026 (card pages and licence texts); re-check them before redistributing weights. The cards describe the Hugging Face Instruct models; we run the Ollama tags above and have not checked that they are byte-identical to those releases.
 
-The model is a setting (`MODEL=...`), and any OpenAI-compatible endpoint can be used instead with `OPENAI_BASE_URL`.
-
-## Results
-
-Each case is the sample app in [`sample-app/`](sample-app), upgraded to Spring Boot 3.3.5. Reports are in [`reports/`](reports). All runs were on one laptop (18 GB RAM) with a single run per model, so treat them as indicative, not a benchmark.
-
-**Case 1: security config only** (6 tests)
-
-| Model | Tests after migration | Fix rounds | Time |
-|---|---|---|---|
-| Qwen2.5-Coder 7B | 6/6 pass | 2 | 26 s |
-| DeepSeek-Coder 6.7B | 6/6 pass | 2 | 49 s |
-
-Both rewrote `WebSecurityConfigurerAdapter` into a `SecurityFilterChain` bean. DeepSeek also modernised the `csrf` call; Qwen left the deprecated form, which still works.
-
-**Case 2: harder, adds in-memory users, a `PasswordEncoder` and an exposed `AuthenticationManager` bean** (11 tests, with real login checks)
-
-This is what the sample app in [`sample-app/`](sample-app) contains now. Case 1 above was run on an earlier, smaller version of it (6 tests), so it can no longer be reproduced with this repo.
-
-| Model | Tests after migration | Outcome |
-|---|---|---|
-| Qwen2.5-Coder 7B | **11/11 pass** | 1 model round + 1 automatic import repair, about 30 s. Reproduced in 2 runs. |
-| DeepSeek-Coder 6.7B | 8/11 | Compiles but disables HTTP Basic (`httpBasic(AbstractHttpConfigurer::disable)`) where the original enabled it, so 3 login tests fail. Same result in repeated runs; flagged for a human. |
-
-How the harder case got to this point, so the numbers are not misread: the first runs (see `reports/hard-first-run-*` and `reports/hard-rerun-*`) failed for both models. Qwen reached 9/11 with a `StackOverflowError`, and DeepSeek did not compile. We then added help to the harness, and Qwen passes with it:
-
-- cheat sheet entries for the Spring Security 6 user store and `AuthenticationManager` bean, and for the correct import packages
-- the original Spring Boot 2.7 file and the source of the failing tests in the prompt
-- an automatic import repair for known Spring Security classes, before the model is asked
-- 5 fix rounds instead of 3, an 8192-token context, and a 30-second per-test timeout
-
-So the honest reading is: **Qwen passes inside a harness that supplies this knowledge; it did not work it out unaided.** DeepSeek did not pass even with the same help. Trying randomness on retries did not help it (and made it much slower), so that was removed.
-
-## Limits
-
-- Passing tests only proves what the tests cover.
-- 6–7B models handle the common Spring Security rewrite but struggle with interacting changes. One of the two models failed the harder case.
-- The cheat sheet and the import table in the agent are written for Spring Security 6. Supporting other migrations means extending them.
-- Case 2's cheat sheet was extended after seeing the models fail on this sample app, so its pass is not a measure of generalisation. Only tested on the included sample app.
+The model is a setting (`--model` or `MODEL=...`), and any OpenAI-compatible endpoint can be used instead with `OPENAI_BASE_URL`.
 
 ## Run it
 
-You need Java 17+, Maven, Python 3 (standard library only) and [Ollama](https://docs.ollama.com/quickstart).
+You need JDK 17+, Maven, Python 3.10+ (standard library only) and [Ollama](https://docs.ollama.com/quickstart).
 
 ```bash
 ollama pull qwen2.5-coder:7b-instruct
 
-# baseline: the Spring Boot 2.7 sample app passes its tests
+# baseline: the Spring Boot 2.7 sample app passes its own tests
 (cd sample-app && mvn test)
 
-# run the agent (copies sample-app to migrated-app/, writes REPORT.md)
-python3 agent/migrate.py
+# upgrade it (copies to migrated-sample-app/, writes REPORT.md)
+python3 agent/migrate.py sample-app
 
-# try another model
-MODEL=deepseek-coder:6.7b python3 agent/migrate.py
+# the second sample app (JPA, Hibernate, Actuator)
+python3 agent/migrate.py sample-jpa-app --model deepseek-coder:6.7b
+
+# useful flags
+python3 agent/migrate.py sample-app --max-attempts 0          # upgrade tool only, no model
+python3 agent/migrate.py sample-app --no-openrewrite          # built-in fallback upgrade
+python3 agent/migrate.py sample-app --cve-scan                # also count known advisories
+python3 agent/migrate.py --help
 ```
 
-If `mvn` is not on your PATH, set `MVN=/path/to/mvn`. Other settings: `MAX_ATTEMPTS` (default 5), `BOOT3_VERSION` (default 3.3.5), `OLLAMA_URL`, and `OPENAI_BASE_URL` / `API_KEY` for a hosted open-weight model.
+Exit codes: `0` upgraded and equivalent, `1` could not finish (flagged for a human), `2` test files were modified (run invalid), `3` tests pass but security behaviour differs.
+
+Point it at your own app with `python3 agent/migrate.py /path/to/app`. To get the security check, add an `endpoints.json` next to its `pom.xml` (see [`sample-app/endpoints.json`](sample-app/endpoints.json)). If `mvn` is not on your PATH, set `MVN=/path/to/mvn`.
+
+Run the agent's own tests (no Ollama or Maven needed) and the benchmark:
+
+```bash
+python3 -I -m unittest discover -s agent/tests -t agent
+python3 agent/bench.py
+```
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `agent/migrate.py` | The agent: upgrade, build, model fix, retry, report |
-| `agent/cheatsheet.md` | Migration notes given to the model |
-| `sample-app/` | Spring Boot 2.7 app with security and validation tests |
-| `reports/` | Reports from the model runs above |
+| `agent/migrate.py` | The agent |
+| `agent/cheatsheet/` | Migration notes given to the model, one file per topic |
+| `agent/securitydiff.py` | Security equivalence check |
+| `agent/cves.py` | Optional advisory scan |
+| `agent/bench.py` | Benchmark runner that writes `BENCHMARK.md` |
+| `agent/tests/` | Unit tests with a mocked model and build |
+| `sample-app/`, `sample-jpa-app/` | Spring Boot 2.7 sample apps with tests and `endpoints.json` |
+| `reports/` | Reports and per-round logs from the runs described above |
+| `BENCHMARK.md` | The benchmark table |
+
+## Limitations
+
+- Two small sample apps. Results on your codebase will differ.
+- The model sizes tested are 6–7B. They handle the common Spring Security rewrite and Hibernate 6 `@Type` change, but results vary between runs and a failed run is expected, which is why every failure is reported and flagged.
+- When tests fail at runtime the agent can pick the wrong file to fix (see Results). This hurt the weaker model in every one of its runs.
+- The cheat sheet and import table were extended after watching models fail on these sample apps, so the pass rates measure the harness plus those hints, not unaided models.
+- The security check compares HTTP status codes for the endpoints you list; it does not read your security configuration.
+- Maven only; the agent does not patch vulnerable dependencies itself beyond what the Boot 3 upgrade brings.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The easiest contributions are a cheat sheet entry, a new sample app or a new model in the benchmark.
 
 ## Licence
 
