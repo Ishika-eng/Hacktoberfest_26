@@ -159,6 +159,29 @@ class SettingsDoNotLeakBetweenRuns(unittest.TestCase):
         self.assertEqual(args.model, migrate.DEFAULT_MODEL)
 
 
+class MixedMavenGradle(unittest.TestCase):
+    def test_gradle_files_are_removed_from_a_maven_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Path(tmp)
+            (w / "pom.xml").write_text("<project/>")
+            (w / "build.gradle").write_text("x")
+            (w / "gradlew").write_text("x")
+            (w / "gradle" / "wrapper").mkdir(parents=True)
+            (w / "src" / "main").mkdir(parents=True)
+            (w / "src" / "main" / "A.java").write_text("class A {}")
+            dropped = migrate.drop_gradle_files(w)
+            self.assertEqual(sorted(dropped), ["build.gradle", "gradle/", "gradlew"])
+            self.assertTrue((w / "pom.xml").exists())
+            self.assertTrue((w / "src" / "main" / "A.java").exists())
+
+    def test_a_gradle_only_project_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Path(tmp)
+            (w / "build.gradle").write_text("x")
+            self.assertEqual(migrate.drop_gradle_files(w), [])
+            self.assertTrue((w / "build.gradle").exists())
+
+
 class OverrideRepair(unittest.TestCase):
     def test_removes_an_override_the_compiler_rejects(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -105,6 +105,30 @@ def git_ignored(path):
     return p.returncode == 0
 
 
+GRADLE_FILES = ("build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradlew", "gradlew.bat",
+                "gradle.properties")
+
+
+def drop_gradle_files(work):
+    """In a Maven project that also has Gradle files, remove the Gradle ones from the work copy.
+
+    The OpenRewrite Maven plugin tries to parse a Gradle build too, which needs a Gradle download and crashes the
+    whole upgrade (seen on spring-petclinic). The agent is Maven-only, so the copy is made Maven-only.
+    """
+    if not (work / "pom.xml").exists():
+        return []
+    dropped = []
+    for name in GRADLE_FILES:
+        f = work / name
+        if f.is_file():
+            f.unlink()
+            dropped.append(name)
+    if (work / "gradle").is_dir():
+        shutil.rmtree(work / "gradle")
+        dropped.append("gradle/")
+    return dropped
+
+
 def openrewrite_upgrade(work):
     """Run OpenRewrite's Spring Boot 3 recipe. Returns (ok, output, reason-if-not-ok)."""
     code, out = run([MVN, "-B", "-q", f"org.openrewrite.maven:rewrite-maven-plugin:{OPENREWRITE_PLUGIN}:run",
@@ -495,9 +519,13 @@ def main(argv=None):
     originals = {f: f.read_text() for f in work.rglob("*.java")}
     tests_before_upgrade = hash_tests(work)
 
+    dropped_gradle = []
     tool = "built-in fallback"
     fallback_reason = "OpenRewrite was disabled (--no-openrewrite)" if args.no_openrewrite else ""
     if not args.no_openrewrite:
+        dropped_gradle = drop_gradle_files(work)
+        if dropped_gradle:
+            print(f"   Maven project with Gradle files: ignoring {', '.join(dropped_gradle)} in the work copy")
         print(f"[1/4] OpenRewrite {OPENREWRITE_RECIPE}")
         ok_tool, tool_out, tool_why = openrewrite_upgrade(work)
         if ok_tool:
@@ -660,6 +688,8 @@ def write_report(path, v):
     r = ["# Migration report", "",
          f"- App: `{src.name}`  |  Model: {'none (upgrade tool only)' if MAX_ATTEMPTS == 0 else '`' + MODEL + '`'}  |  Upgrade tool: {v['tool']}",
          f"- Spring Boot parent after upgrade: `{v['target']}`",
+         *([f"- Gradle files ignored in the work copy (the agent is Maven-only): {', '.join(v['dropped_gradle'])}"]
+           if v["dropped_gradle"] else []),
          *([f"- **Warning: the built-in fallback was used, not OpenRewrite.** {v['fallback_reason']}"]
            if v["tool"] == "built-in fallback" and v["fallback_reason"] and not v["fallback_reason"].startswith("OpenRewrite was disabled") else []),
          f"- Result: **{verdict}**",
