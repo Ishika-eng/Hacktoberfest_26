@@ -1,0 +1,17 @@
+{
+  "users": {
+    "anonymous": null,
+    "user": ["alice", "alice123"],
+    "admin": ["admin", "admin123"]
+  },
+  "endpoints": [
+    {"method": "GET", "path": "/public/ping"},
+    {"method": "GET", "path": "/admin/secret"},
+    {"method": "GET", "path": "/admin/"},
+    {"method": "GET", "path": "/orders"},
+    {"method": "POST", "path": "/orders", "json": {"item": "book", "quantity": 2}},
+    {"method": "POST", "path": "/orders", "json": {"item": "", "quantity": 0}},
+    {"method": "POST", "path": "/public/auth-check", "form": {"username": "admin", "password": "admin123"}},
+    {"method": "POST", "path": "/public/auth-check", "form": {"username": "admin", "password": "wrong"}}
+  ]
+}
