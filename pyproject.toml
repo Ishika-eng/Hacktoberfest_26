@@ -1,0 +1,19 @@
+[project]
+name = "boot-upgrade-agent"
+version = "0.2.0"
+description = "Upgrade Spring Boot 2.7 apps to Spring Boot 3 with a local open-weight model, checked by the app's own tests."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = []  # the agent uses only the Python standard library
+
+[project.optional-dependencies]
+dev = ["ruff==0.16.10"]
+
+[tool.ruff]
+line-length = 130
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B"]
+ignore = ["E501"]  # long lines are fine in prompts and report templates

@@ -1,0 +1,3 @@
+# The agent itself needs nothing beyond the Python 3.10+ standard library.
+# Development only:
+ruff==0.16.10
