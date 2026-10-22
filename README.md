@@ -23,15 +23,15 @@ The agent runs OpenRewrite first, then builds and tests. It sends each compile e
 | OpenRewrite `UpgradeSpringBoot_3_3` first, with a small built-in fallback if it fails | Done |
 | Build and test loop; the model fixes files from compile errors, test failures and Spring startup failures | Done |
 | Deterministic import repair (wrong, missing or unused imports) before spending a model call | Done |
-| Test-integrity guard: the agent can only write under `src/main`, test files are hashed and a changed test invalidates the run | Done |
+| Test-integrity guard: the agent can only write under `src/main`; every file under `src/test` (tests and resources) and every `pom.xml` / `.mvn` file is hashed; new `skipTests`, `maven.test.skip`, `testFailureIgnore` or surefire excludes are rejected; the upgraded app must execute exactly the tests the Boot 2 original ran | Done |
 | Regression rollback: a round that scores worse is reverted, and a rejected attempt is shown to the model so it does not repeat it | Done |
 | Reject model replies that answer about the wrong file | Done |
 | Per-round prompts and replies saved to `runs/` | Done |
-| Security equivalence check: same requests as anonymous / user / admin against the old and new build | Done, for the endpoints listed in the app's `endpoints.json` (not auto-discovered) |
-| Known-advisory counts before and after (`--cve-scan`, uses osv.dev) | Done, opt-in; counts advisories, does not patch dependencies itself |
+| Security equivalence check: same requests as anonymous / user / admin against the old and new build. Separates *denied* (401/403) from *not found* (404), lists what each change means and puts newly accessible requests first | Done, for the endpoints listed in the app's `endpoints.json` (not auto-discovered) |
+| OSV advisory counts before and after, with the list of what remains (`--cve-scan`) | Done, opt-in. These are advisories for exact versions, not confirmed CVEs, and the agent does not bump dependencies itself |
 | Model-written diagnosis for failures and security differences | Done; labelled unverified |
 | Java 17+ check with a clear error | Done |
-| Two sample apps and a benchmark ([BENCHMARK.md](BENCHMARK.md)) | Done |
+| Two sample apps, one held-out third-party app (spring-petclinic, pinned commit) and a benchmark that records hardware, Ollama version, model quantization, sampling settings and whether repeated runs produced identical code ([BENCHMARK.md](BENCHMARK.md)) | Done |
 | Gradle support | Not yet |
 | Auto-discovering endpoints for the security check | Not yet |
 | Demo video | Not yet |
@@ -90,12 +90,19 @@ How to read these results fairly:
 - Three runs per cell is a small sample, and models are not perfectly repeatable even at temperature 0.
 - Two small apps are not your codebase. Treat this as evidence that the approach works, not as a guarantee.
 
+## Held-out test
+
+Both sample apps and the cheat sheet were written by us, so they could be tuned to each other. To check, the benchmark also includes an app we did not write: the Spring team's own [spring-petclinic](https://github.com/spring-projects/spring-petclinic) at commit `a5cbb85` (Spring Boot 2.7.3, Apache-2.0), pinned and fetched on demand instead of copied into this repo. The cheat sheet was frozen before its first run, and the results are reported as they came out. Details and rules: [`agent/heldout/README.md`](agent/heldout/README.md). Petclinic has no Spring Security, so it tests the upgrade and Hibernate/JPA side, not access control.
+
+HELDOUT_RESULTS_PLACEHOLDER
+
 ## Safety
 
 - The agent works on a **copy**; your original app is never modified.
-- It **cannot edit tests**: writes are limited to `src/main`, and test files are hashed after the upgrade tool runs and again at the end. A changed test makes the run exit with code 2 and the report says `INVALID`. If the upgrade tool itself rewrites a test file, the report lists it.
+- **It cannot make the tests easier.** First it runs the original app's tests, which must pass, and records how many ran. After the upgrade, a run only counts as a pass if the same number of tests ran and passed (a skipped test is not a pass). Writes are limited to `src/main`; everything under `src/test` (tests and test resources) and every `pom.xml` and `.mvn` file is hashed after the upgrade tool runs and again at the end; and a pom that gains `skipTests`, `maven.test.skip`, `testFailureIgnore` or surefire excludes is rejected. Any of these makes the run exit with code 2 and the report says `INVALID`. If the upgrade tool itself rewrites a test file, the report lists it.
 - **Every output needs human review.** Passing tests only proves what the tests cover. The security check only covers the endpoints and roles you list.
-- `--cve-scan` is opt-in because it sends dependency names and versions (not source code) to api.osv.dev.
+- The security check says what each change means. A request that used to work and now returns **404** is a route that no longer matches, which is a different problem from one that now returns **403** (access removed). A request that was denied or missing and is now **allowed** is listed first as a possible exposure.
+- `--cve-scan` is opt-in because it sends dependency names and versions (not source code) to api.osv.dev. The numbers are OSV advisories, not confirmed CVEs, and many may not affect your app. The agent does not bump dependencies, so the report lists the advisories that remain after the upgrade.
 - The model's diagnosis is generated text and is labelled unverified in the report.
 
 ## Models used
@@ -143,6 +150,10 @@ Run the agent's own tests (no Ollama or Maven needed) and the benchmark:
 ```bash
 python3 -I -m unittest discover -s agent/tests -t agent
 python3 agent/bench.py
+
+# fetch the held-out app and upgrade it
+python3 agent/heldout.py
+python3 agent/migrate.py heldout/spring-petclinic --endpoints agent/heldout/spring-petclinic.endpoints.json
 ```
 
 ## Layout
@@ -154,6 +165,7 @@ python3 agent/bench.py
 | `agent/securitydiff.py` | Security equivalence check |
 | `agent/cves.py` | Optional advisory scan |
 | `agent/bench.py` | Benchmark runner that writes `BENCHMARK.md` |
+| `agent/heldout.py`, `agent/heldout/` | Fetches the held-out app at its pinned commit; its endpoint spec and rules |
 | `agent/tests/` | Unit tests with a mocked model and build |
 | `sample-app/`, `sample-jpa-app/` | Spring Boot 2.7 sample apps with tests and `endpoints.json` |
 | `reports/` | Reports and per-round logs from the runs described above |
