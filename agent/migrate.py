@@ -27,12 +27,14 @@ sys.path.insert(0, str(ROOT))
 import cves  # noqa: E402
 import securitydiff  # noqa: E402
 
-MODEL = os.environ.get("MODEL", "qwen2.5-coder:7b-instruct")
+DEFAULT_MODEL = os.environ.get("MODEL", "qwen2.5-coder:7b-instruct")
+MODEL = DEFAULT_MODEL  # main() sets these from the command line; the defaults below must not follow them
 OLLAMA = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OPENAI_BASE = os.environ.get("OPENAI_BASE_URL")  # set to use a hosted open-weight model instead
 MVN = os.environ.get("MVN", "mvn")
 MVN = str(Path(MVN).resolve()) if os.sep in MVN else MVN
-MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "5"))
+DEFAULT_MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "5"))
+MAX_ATTEMPTS = DEFAULT_MAX_ATTEMPTS
 BOOT3 = os.environ.get("BOOT3_VERSION", "3.3.5")  # used by the built-in fallback only
 OPENREWRITE_PLUGIN = os.environ.get("OPENREWRITE_PLUGIN", "6.46.1")
 OPENREWRITE_SPRING = os.environ.get("OPENREWRITE_SPRING", "6.37.1")
@@ -354,6 +356,15 @@ KNOWN_IMPORTS = {  # Spring Security 6 classes small models often import from th
     "BCryptPasswordEncoder": "org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder",
     "AbstractHttpConfigurer": "org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer",
     "HttpMethod": "org.springframework.http.HttpMethod",
+    # Jakarta classes (formerly javax) that rewrites commonly use without importing
+    **{n: f"jakarta.persistence.{n}" for n in (
+        "Column", "Lob", "Entity", "Id", "GeneratedValue", "GenerationType", "Table", "Transient", "Enumerated",
+        "EnumType", "ManyToOne", "OneToMany", "OneToOne", "ManyToMany", "JoinColumn", "Embeddable", "Embedded",
+        "MappedSuperclass", "Version", "Temporal", "TemporalType")},
+    **{n: f"jakarta.validation.constraints.{n}" for n in ("NotBlank", "NotNull", "NotEmpty", "Size", "Min", "Max", "Email", "Pattern")},
+    "Valid": "jakarta.validation.Valid",
+    "HttpServletRequest": "jakarta.servlet.http.HttpServletRequest",
+    "HttpServletResponse": "jakarta.servlet.http.HttpServletResponse",
 }
 
 
@@ -371,11 +382,36 @@ def repair_imports(path, output):
             continue
         new = re.sub(rf"^import (?!{re.escape(fq)};)[\w.]+\.{name};\n", "", new, flags=re.M)  # wrong package
         if f"import {fq};" not in new:
-            new = re.sub(r"(^package [^\n]+\n)", rf"\1\nimport {fq};\n", new, count=1, flags=re.M)
+            with_package = re.sub(r"(^package [^\n]+\n)", rf"\1\nimport {fq};\n", new, count=1, flags=re.M)
+            new = with_package if with_package != new else f"import {fq};\n\n{new}"  # no package line: put it at the top
     if new != text:
         path.write_text(new)
         return True
     return False
+
+
+def repair_overrides(path, output):
+    """Delete `@Override` where the compiler says the method no longer overrides anything (its superclass is gone)."""
+    lines = path.read_text().splitlines(keepends=True)
+    targets = {int(m.group(1)) - 1 for m in re.finditer(
+        rf"{re.escape(path.name)}:\[(\d+),\d+\]\s+method does not override or implement a method from a supertype", output)}
+    changed = False
+    for n in targets:
+        for i in range(min(n, len(lines) - 1), max(n - 3, -1), -1):  # the error points at or just below the annotation
+            if lines[i].strip() == "@Override":
+                lines[i] = ""
+                changed = True
+                break
+    if changed:
+        path.write_text("".join(lines))
+    return changed
+
+
+def repair_known(path, output):
+    """Deterministic fixes for slips that need no model: imports and stale @Override. True if anything changed."""
+    fixed_imports = repair_imports(path, output)
+    fixed_overrides = repair_overrides(path, output)
+    return fixed_imports or fixed_overrides
 
 
 def build_prompt(path, error, original, current, cheatsheet, tests="", rejected=""):
@@ -409,8 +445,8 @@ Reply with the complete corrected file in a single ```java block and nothing els
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description="Upgrade a Spring Boot 2.7 app to Spring Boot 3 with a local open-weight model.")
     ap.add_argument("app", nargs="?", default=str(REPO / "sample-app"), help="path to the Spring Boot 2.x app")
-    ap.add_argument("--model", default=MODEL)
-    ap.add_argument("--max-attempts", type=int, default=MAX_ATTEMPTS, help="model fix rounds; 0 = upgrade tool only")
+    ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--max-attempts", type=int, default=DEFAULT_MAX_ATTEMPTS, help="model fix rounds; 0 = upgrade tool only")
     ap.add_argument("--no-openrewrite", action="store_true", help="use the built-in fallback upgrade")
     ap.add_argument("--skip-security-check", action="store_true")
     ap.add_argument("--skip-baseline-check", action="store_true",
@@ -487,8 +523,17 @@ def main(argv=None):
         iterations += 1
         print(f"[2/4] build + test (run {iterations})")
         code, out = build(work)
+        auto_fixed = []
+        if MAX_ATTEMPTS > 0:  # judge an attempt on its merits: first fix plain import and @Override slips, then rebuild
+            for _ in range(3):
+                touched = [f for f in broken_files(out, work) if code != 0 and repair_known(f, out)] if code != 0 else []
+                if not touched:
+                    break
+                auto_fixed += [f.name for f in touched if f.name not in auto_fixed]
+                print(f"   auto-repaired {', '.join(f.name for f in touched)} before judging this attempt")
+                code, out = build(work)
         score = parse_score(code, out)
-        action = "build"
+        action = "build" + (f"; auto-repaired imports/@Override in {', '.join(auto_fixed)}" if auto_fixed else "")
         if best is None or score < best[0]:
             best = (score, snapshot(work), out)
         elif score > best[0]:
@@ -510,7 +555,7 @@ def main(argv=None):
         if not files:
             print("   no source file identified in the error; stopping")
             break
-        repaired = [f for f in files if repair_imports(f, out)]
+        repaired = [f for f in files if repair_known(f, out)]
         if repaired:  # deterministic auto-import fix; rebuild before spending a model call
             print(f"   auto-import repaired {', '.join(f.name for f in repaired)}")
             rounds[-1]["action"] += f"; auto-import fix in {', '.join(f.name for f in repaired)}"

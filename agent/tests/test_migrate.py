@@ -148,6 +148,37 @@ class ImportRepair(unittest.TestCase):
         self.assertFalse(migrate.repair_imports(self.file, "[ERROR]   symbol:   class Mystery\n"))
 
 
+class SettingsDoNotLeakBetweenRuns(unittest.TestCase):
+    def test_a_zero_attempt_run_does_not_change_the_next_runs_default(self):
+        migrate.MAX_ATTEMPTS = 0
+        migrate.MODEL = "some-other-model"
+        self.addCleanup(lambda: (setattr(migrate, "MAX_ATTEMPTS", migrate.DEFAULT_MAX_ATTEMPTS),
+                                 setattr(migrate, "MODEL", migrate.DEFAULT_MODEL)))
+        args = migrate.parse_args(["x"])
+        self.assertEqual(args.max_attempts, migrate.DEFAULT_MAX_ATTEMPTS)
+        self.assertEqual(args.model, migrate.DEFAULT_MODEL)
+
+
+class OverrideRepair(unittest.TestCase):
+    def test_removes_an_override_the_compiler_rejects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / "S.java"
+            f.write_text("class S {\n    @Bean\n    @Override\n    public int a() { return 1; }\n\n    @Override\n    public String toString() { return \"s\"; }\n}\n")
+            out = "[ERROR] /x/S.java:[3,5] method does not override or implement a method from a supertype\n" * 2
+            self.assertTrue(migrate.repair_overrides(f, out))
+            text = f.read_text()
+            self.assertEqual(text.count("@Override"), 1)  # only the rejected one went; toString() keeps its own
+            self.assertIn("@Bean", text)
+            self.assertFalse(migrate.repair_overrides(f, "all good"))
+
+    def test_common_jpa_classes_are_known(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / "Product.java"
+            f.write_text("package a;\n\nclass Product { @Column(length = 10) String d; }\n")
+            self.assertTrue(migrate.repair_known(f, "[ERROR]   symbol:   class Column\n"))
+            self.assertIn("import jakarta.persistence.Column;", f.read_text())
+
+
 class FindingBrokenFiles(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -366,6 +397,22 @@ class AgentLoop(unittest.TestCase):
         self.assertIn("fixed", (work / "src/main/java/S.java").read_text())
         self.assertIn("tests PASS", report.read_text())
         self.assertEqual(len(app.prompts), 1)
+
+    def test_a_rewrite_that_only_misses_an_import_is_repaired_not_rolled_back(self):
+        slip = ("[ERROR] COMPILATION ERROR :\n[ERROR] {FILE}:[1,10] cannot find symbol\n[ERROR]   symbol:   class Column\n"
+                "[ERROR] {FILE}:[2,1] another\n")  # score 1002, worse than the starting 1001: would be rolled back
+        app, work, report, code = self.run_main([self.COMPILE_1, slip, "OK"], reply="class S { @Column int d; }")
+        self.assertEqual(code, 0)
+        self.assertIn("import jakarta.persistence.Column;", (work / "src/main/java/S.java").read_text())
+        text = report.read_text()
+        self.assertIn("auto-repaired imports/@Override in S.java", text)
+        self.assertNotIn("rolled back (score", text)  # no actual rollback entry (the intro sentence always says "rolled back")
+
+    def test_the_upgrade_tool_only_row_gets_no_repairs(self):
+        slip = "[ERROR] COMPILATION ERROR :\n[ERROR] {FILE}:[1,10] cannot find symbol\n[ERROR]   symbol:   class Column\n"
+        app, work, report, code = self.run_main([slip], max_attempts="0")
+        self.assertEqual(code, 1)
+        self.assertNotIn("auto-repaired", report.read_text())
 
     def test_a_worse_round_is_rolled_back_and_remembered(self):
         app, work, report, code = self.run_main([self.COMPILE_1, self.COMPILE_3, self.COMPILE_3, "OK"],
