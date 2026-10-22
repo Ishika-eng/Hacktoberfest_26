@@ -57,7 +57,7 @@ Both rewrote `WebSecurityConfigurerAdapter` into a `SecurityFilterChain` bean. D
 | Qwen2.5-Coder 7B | first run | 9/11 | Failed with `StackOverflowError`; stopped early |
 | DeepSeek-Coder 6.7B | first run | 0/11 | Spring context failed to start; stopped early |
 | Qwen2.5-Coder 7B | rerun with retry fallback, 3 fix rounds | 9/11 | Still `StackOverflowError`; flagged for a human |
-| DeepSeek-Coder 6.7B | rerun with retry fallback | not yet recorded | |
+| DeepSeek-Coder 6.7B | rerun with retry fallback, 3 fix rounds | 0 run | Does not compile (missing `Customizer` import); flagged for a human |
 
 In the first run the agent stopped before using its retries: Maven trims stack traces, so it could not tell which file to send back to the model. It now retries the files the model already edited. Even with that fix, neither 7B model solved the harder case on its own. The agent reports this honestly and leaves the failing files for a person.
 
