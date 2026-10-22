@@ -22,7 +22,7 @@ The agent runs OpenRewrite first, then builds and tests. It sends each compile e
 |---|---|
 | OpenRewrite `UpgradeSpringBoot_3_3` first, with a small built-in fallback if it fails | Done |
 | Build and test loop; the model fixes files from compile errors, test failures and Spring startup failures | Done |
-| Deterministic import repair (wrong, missing or unused imports) before spending a model call | Done |
+| Deterministic repairs before an attempt is judged and before a model call: wrong, missing or unused imports (including common JPA, validation and servlet classes) and an `@Override` the compiler rejects | Done |
 | Test-integrity guard: the agent can only write under `src/main`; every file under `src/test` (tests and resources) and every `pom.xml` / `.mvn` file is hashed; new `skipTests`, `maven.test.skip`, `testFailureIgnore` or surefire excludes are rejected; the upgraded app must execute exactly the tests the Boot 2 original ran | Done |
 | Regression rollback: a round that scores worse is reverted, and a rejected attempt is shown to the model so it does not repeat it | Done |
 | Reject model replies that answer about the wrong file | Done |
@@ -65,18 +65,20 @@ Measured on an Apple M3 Pro with 18 GB RAM, everything local (Ollama 0.40.3, Qwe
 | App | Setup | Runs passed | Tests passed | Time per run | Security answers that changed |
 |---|---|---|---|---|---|
 | `sample-app` (11 tests) | OpenRewrite alone | 0/1 | does not compile | 12 s | n/a |
-| `sample-app` | **OpenRewrite + agent (Qwen2.5-Coder 7B)** | **3/3** | 11/11 each run | 46 s | 0 of 18 |
+| `sample-app` | **OpenRewrite + agent (Qwen2.5-Coder 7B)** | **3/3** | 11/11 each run | 45 s | 0 of 18 |
 | `sample-jpa-app` (8 tests) | OpenRewrite alone | 0/1 | does not compile | 21 s | n/a |
-| `sample-jpa-app` | OpenRewrite + agent (Qwen2.5-Coder 7B) | **0/3** | none ran | about 151 s | n/a |
+| `sample-jpa-app` | **OpenRewrite + agent (Qwen2.5-Coder 7B)** | **3/3** | 8/8 each run | 51 s | 2 of 24 |
+| `spring-petclinic` (held-out) | OpenRewrite alone | 0/1 | does not compile | 187 s | n/a |
+| `spring-petclinic` (held-out) | OpenRewrite + agent (Qwen2.5-Coder 7B) | 0/1 | none ran | 255 s | n/a |
 
 What this shows:
 
-- **OpenRewrite alone is not enough.** It converts the security rules but cannot rewrite `WebSecurityConfigurerAdapter` (it leaves a "migrate manually" marker), and on the JPA app it rewrote Hibernate's `@Type(type = "text")` into `@Type(text.class)`, which does not compile. Neither app builds afterwards.
-- **`sample-app`: the agent finishes the job.** Qwen passes all 11 tests in about 46 seconds, with one model round, and the generated code is byte-identical in all three runs, so treat it as one result seen three times, not three independent samples. All 18 security checks answer the same as the Boot 2.7 build.
-- **`sample-jpa-app`: it does not.** Qwen fails every run, and the final code equals OpenRewrite's own output: each model attempt scored worse than the starting point and was rolled back. The cause is a gap in the agent, not only the model. The model's `Product.java` rewrite was right but used `@Column` without importing it; the agent's import repair did not know that class, so the attempt counted as swapping one compile error for another and was reverted. Adding common JPA classes to the import repair, and repairing imports before judging an attempt, is the obvious next fix and is not done.
-- **Green tests are not the whole story.** In earlier passing runs of the JPA app (one hand-run with OpenRewrite, and later benchmark runs that turned out to have used the fallback), all 8 tests were green while `GET /products/` changed from **200 to 404** (Spring 6 stopped matching trailing slashes). The security check reports that as "route no longer matches", separately from access being removed, and puts anything newly accessible first. Note that the one early hand-run with real OpenRewrite did pass this app, so the failures above are sensitive to harness changes made since; I have not isolated which one.
+- **OpenRewrite alone is not enough.** It converts the security rules but cannot rewrite `WebSecurityConfigurerAdapter` (it leaves a "migrate manually" marker), and on the JPA app it rewrote Hibernate's `@Type(type = "text")` into `@Type(text.class)`, which does not compile. Neither of our apps builds afterwards. On Petclinic OpenRewrite crashed outright (see below).
+- **With the agent, Qwen finishes both of our apps.** `sample-app`: all 11 tests in 45 seconds, and all 18 security checks answer the same as the Boot 2.7 build. `sample-jpa-app`: all 8 tests in 51 seconds. In both, the generated code is byte-identical in all three runs, so each is one result seen three times, not three independent samples.
+- **Green tests are not the whole story.** On `sample-jpa-app` all 8 tests pass, yet `GET /products/` changes from **200 to 404** for logged-in users (Spring 6 stopped matching trailing slashes). No test covers it. The security check reports it as "route no longer matches", separately from access being removed, and puts anything newly accessible first.
+- **The JPA pass came after a fix made while looking at these results.** Before it, Qwen failed `sample-jpa-app` 3 of 3: the model's rewrite was right but missed an import and left a stale `@Override`, so the attempt scored worse and was rolled back. The agent now repairs those slips (known imports, an `@Override` the compiler rejects) before judging an attempt, and the runs were repeated. Because the change was made after seeing the failure, the pass is not an independent test of it. The single early hand-run that passed this app before the failures is consistent with the model being able to do it.
 
-Fairness notes: the cheat sheet and import table were extended after watching models fail on these two apps, so passes measure the harness plus those hints. Three runs per cell is a small sample, and where the code is identical across runs it is really one sample. Two small apps are not your codebase.
+Fairness notes: the cheat sheet, import table and repairs were extended after watching models fail on these two apps, so passes measure the harness plus those hints. Three runs per cell is a small sample, and where the code is identical across runs it is really one sample. Two small apps are not your codebase.
 
 ## Held-out test
 
@@ -173,7 +175,7 @@ python3 agent/migrate.py heldout/spring-petclinic --endpoints agent/heldout/spri
 - Two small sample apps of our own plus one held-out app that the agent currently fails. Results on your codebase will differ.
 - **OpenRewrite caveats we hit:** it cannot rewrite `WebSecurityConfigurerAdapter`; it can emit code that does not compile (`@Type(text.class)`); it silently does nothing in a folder that `.gitignore` ignores (the agent now warns and works outside the repo); it crashes on projects that have both Maven and Gradle files; it needs the project to compile before it starts; and it does not check behaviour.
 - The agent cannot edit build files. A `pom.xml` problem is flagged for a human, but the loop currently still spends model rounds on unrelated Java files first.
-- A fix that cures one compile error but introduces an easily repaired one (a missing import) is judged worse and rolled back, so the import repair never gets to help. This is why `sample-jpa-app` fails.
+- The score counts compile errors, so a good rewrite that trades one error for a different one can still be rolled back unless the deterministic repairs cover the slip. They cover imports and stale `@Override` only.
 - The 7B model works on the common Spring Security rewrite and not reliably on the rest. A failed run is expected, which is why every failure is reported and flagged.
 - The cheat sheet and import table were extended after watching models fail on our sample apps, so pass rates measure the harness plus those hints, not unaided models.
 - The security check compares HTTP status codes for the endpoints you list; it does not read your security configuration.
