@@ -1,0 +1,18 @@
+{
+  "app": "sample-jpa-app",
+  "model": "qwen2.5-coder:7b-instruct",
+  "tool": "built-in fallback",
+  "boot": "3.3.5",
+  "ok": true,
+  "score": 0,
+  "tests": [
+    8,
+    8
+  ],
+  "model_rounds": 1,
+  "runs": 3,
+  "model_error": null,
+  "security_checks": 24,
+  "security_diffs": 2,
+  "test_files_modified": []
+}
