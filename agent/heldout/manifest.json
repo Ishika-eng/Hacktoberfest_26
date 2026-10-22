@@ -6,5 +6,13 @@
     "boot": "2.7.3",
     "license": "Apache-2.0",
     "about": "The Spring team's own sample app: JPA, Thymeleaf, caching, Actuator. Last Spring Boot 2.7 commit before the move to Boot 3. Not written by us."
+  },
+  "spring-petclinic-rest": {
+    "repo": "https://github.com/spring-petclinic/spring-petclinic-rest.git",
+    "commit": "b29ae4b88424301fe6b2236c6ee2cd71cc30cbf4",
+    "committed": "2022-09-07",
+    "boot": "2.6.2",
+    "license": "Apache-2.0",
+    "about": "The Spring team's REST sample with Spring Security and generated OpenAPI code. Spring Boot 2.6.2, the last Boot 2 commit before the Boot 3 move. Not written by us; added as a second held-out app and run once, untuned."
   }
 }

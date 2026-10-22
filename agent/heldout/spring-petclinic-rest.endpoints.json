@@ -1,0 +1,17 @@
+{
+  "users": {
+    "anonymous": null
+  },
+  "endpoints": [
+    {"method": "GET", "path": "/petclinic/api/owners"},
+    {"method": "GET", "path": "/petclinic/api/owners/1"},
+    {"method": "GET", "path": "/petclinic/api/pets"},
+    {"method": "GET", "path": "/petclinic/api/pettypes"},
+    {"method": "GET", "path": "/petclinic/api/vets"},
+    {"method": "GET", "path": "/petclinic/api/specialties"},
+    {"method": "GET", "path": "/petclinic/api/visits"},
+    {"method": "GET", "path": "/petclinic/api/users"},
+    {"method": "GET", "path": "/petclinic/api/owners/"},
+    {"method": "GET", "path": "/petclinic/api/nothing-here"}
+  ]
+}

@@ -6,6 +6,10 @@ Apps we did **not** write, used to check that the agent and its cheat sheet are 
 |---|---|---|---|
 | [spring-petclinic](https://github.com/spring-projects/spring-petclinic) | `a5cbb8505a1df3c348c06607933a07fc8c87c222` (2022-10-16, Spring Boot 2.7.3) | Apache-2.0 | JPA, Thymeleaf, caching, Actuator. **No Spring Security**, so the security check only covers anonymous access. |
 
+| [spring-petclinic-rest](https://github.com/spring-petclinic/spring-petclinic-rest) | `b29ae4b88424301fe6b2236c6ee2cd71cc30cbf4` (2022-09-07, Spring Boot 2.6.2) | Apache-2.0 | Spring Security and Java code generated from an OpenAPI file at build time. Added after the first app stopped being held-out. |
+
+**Status.** spring-petclinic: the first run failed (genuinely held-out); a later run passes after the agent was changed to ignore Gradle files, so that result is **not** held-out. spring-petclinic-rest: run once, untuned, and it fails because the generated sources use `javax.*` (the fix is in the pom, not in editable Java). See the main README.
+
 The apps are not vendored. Fetch them at the pinned commit:
 
 ```bash
