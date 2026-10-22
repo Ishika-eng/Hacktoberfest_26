@@ -1,0 +1,15 @@
+{
+  "app": "sample-app",
+  "model": null,
+  "tool": "built-in fallback",
+  "boot": "3.3.5",
+  "ok": false,
+  "score": 1007,
+  "tests": null,
+  "model_rounds": 0,
+  "runs": 1,
+  "model_error": null,
+  "security_checks": null,
+  "security_diffs": null,
+  "test_files_modified": []
+}
