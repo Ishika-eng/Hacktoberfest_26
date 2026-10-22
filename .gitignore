@@ -1,0 +1,10 @@
+# local tooling and build output
+tools/
+migrated-app/
+target/
+__pycache__/
+.DS_Store
+# transient agent output (curated copies live in reports/)
+REPORT*.md
+.verify.log
+.base.log
