@@ -15,7 +15,7 @@ MODEL = os.environ.get("MODEL", "qwen2.5-coder:7b-instruct")
 OLLAMA = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OPENAI_BASE = os.environ.get("OPENAI_BASE_URL")  # set to use a hosted open-weight model instead
 MVN = os.environ.get("MVN", "mvn")
-MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "3"))
+MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "5"))
 BOOT3 = os.environ.get("BOOT3_VERSION", "3.3.5")
 CHEATSHEET = (ROOT / "cheatsheet.md").read_text()
 
@@ -43,7 +43,7 @@ def ask_model(prompt):
               "messages": [{"role": "user", "content": prompt}]}
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {os.environ.get('API_KEY','')}"}
     else:
-        url, body = f"{OLLAMA}/api/chat", {"model": MODEL, "stream": False, "options": {"temperature": 0},
+        url, body = f"{OLLAMA}/api/chat", {"model": MODEL, "stream": False, "options": {"temperature": 0, "num_ctx": 8192},
               "messages": [{"role": "user", "content": prompt}]}
         headers = {"Content-Type": "application/json"}
     req = urllib.request.Request(url, json.dumps(body).encode(), headers)
@@ -81,21 +81,76 @@ def trim(output, limit=3500):
     return "\n".join(lines)[:limit] or output[-limit:]
 
 
-def fix_file(path, error):
+def failing_tests(output, work, limit=3):
+    """Source of the failing tests: shows the model what behaviour the app must keep."""
+    seen, snippets = set(), []
+    for cls, meth in re.findall(r"\[ERROR\]\s+(\w+Tests?)\.(\w+)[:\s]", output):
+        if (cls, meth) in seen:
+            continue
+        seen.add((cls, meth))
+        for f in (work / "src" / "test").rglob(f"{cls}.java"):
+            m = re.search(rf"[^\n]*\bvoid {meth}\(.*?\n    \}}\n", f.read_text(), re.S)
+            if m:
+                snippets.append(m.group(0).strip())
+        if len(snippets) >= limit:
+            break
+    return "\n\n".join(snippets)
+
+
+def fix_file(path, error, original, tests=""):
+    tests_block = f"\nFailing tests (the behaviour the app must have):\n```java\n{tests}\n```\n" if tests else ""
     prompt = f"""You are migrating a Spring Boot 2.7 app to Spring Boot 3 (Spring Security 6, Java 17).
-The build or tests failed. Fix the file below so it compiles and keeps the SAME behaviour.
+The build or tests failed. Fix the file below so it compiles and keeps the SAME behaviour as the original.
+Every feature the original enables (for example HTTP Basic auth, CSRF settings, URL rules, users, beans) must still be enabled.
 
 Migration notes:
 {CHEATSHEET}
 Build error:
 {error}
+{tests_block}
+ORIGINAL Spring Boot 2.7 version of {path.name} (this is the behaviour to preserve):
+```java
+{original}
+```
 
-File {path.name}:
+CURRENT version of {path.name} (this is what fails):
 ```java
 {path.read_text()}
 ```
 Reply with the complete corrected file in a single ```java block and nothing else."""
     return extract_java(ask_model(prompt))
+
+
+KNOWN_IMPORTS = {  # Spring Security 6 classes small models often import from the wrong package
+    "Customizer": "org.springframework.security.config.Customizer",
+    "SecurityFilterChain": "org.springframework.security.web.SecurityFilterChain",
+    "AuthenticationConfiguration":
+        "org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration",
+    "AuthenticationManager": "org.springframework.security.authentication.AuthenticationManager",
+    "UserDetailsService": "org.springframework.security.core.userdetails.UserDetailsService",
+    "User": "org.springframework.security.core.userdetails.User",
+    "InMemoryUserDetailsManager": "org.springframework.security.provisioning.InMemoryUserDetailsManager",
+    "PasswordEncoder": "org.springframework.security.crypto.password.PasswordEncoder",
+    "BCryptPasswordEncoder": "org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder",
+    "AbstractHttpConfigurer": "org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer",
+}
+
+
+def repair_imports(path, output):
+    """Like an IDE's auto-import: fix `cannot find symbol: class X` for known classes. True if edited."""
+    text = path.read_text()
+    new = text
+    for name in set(re.findall(r"symbol:\s+class (\w+)", output)):
+        fq = KNOWN_IMPORTS.get(name)
+        if not fq:
+            continue
+        new = re.sub(rf"^import (?!{re.escape(fq)};)[\w.]+\.{name};\n", "", new, flags=re.M)  # wrong package
+        if f"import {fq};" not in new:
+            new = re.sub(r"(^package [^\n]+\n)", rf"\1\nimport {fq};\n", new, count=1, flags=re.M)
+    if new != text:
+        path.write_text(new)
+        return True
+    return False
 
 
 def main():
@@ -109,7 +164,7 @@ def main():
     log, ok, edited = [], False, []
     for attempt in range(1, MAX_ATTEMPTS + 2):
         print(f"[2/3] build + test (run {attempt})")
-        code, out = run([MVN, "-q", "-B", "test"], WORK)
+        code, out = run([MVN, "-q", "-B", "-Djunit.jupiter.execution.timeout.default=30s", "test"], WORK)
         if code == 0:
             ok = True
             break
@@ -123,9 +178,13 @@ def main():
         if not files:
             print("   no source file identified in the error; stopping")
             break
+        repaired = [f for f in files if repair_imports(f, out)]
+        if repaired:  # deterministic auto-import fix; rebuild before spending a model call
+            print(f"   auto-import repaired {', '.join(f.name for f in repaired)}")
+            continue
         for f in files:
             print(f"   model={MODEL} fixing {f.name}")
-            f.write_text(fix_file(f, err))
+            f.write_text(fix_file(f, err, originals.get(f, ""), failing_tests(out, WORK)))
             if f not in edited:
                 edited.append(f)
 

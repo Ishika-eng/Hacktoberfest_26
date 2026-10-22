@@ -17,14 +17,16 @@ Spring Boot 2.7 app
    ▼  2. mvn test
    │        ├─ passes ──► write report
    │        └─ fails
-   ▼  3. send the error + the broken file + a short migration cheat sheet
-   │     to an open-weight model (via Ollama, on your machine)
-   ▼  4. write the model's fixed file, go back to 2 (max 3 fix rounds)
+   ▼  3. missing import? fix it deterministically (like an IDE auto-import)
+   ▼  4. otherwise send the error, the broken file, the ORIGINAL file, the source
+   │     of the failing tests and a migration cheat sheet to an open-weight
+   │     model (via Ollama, on your machine)
+   ▼  5. write the model's fixed file, go back to 2 (max 5 fix rounds)
    ▼
    Report: diff, test result, and anything left for a human
 ```
 
-The model only ever sees the failing file and the error, not the whole repo. Company code never leaves the machine, which is the point of using an open-weight model.
+The model only ever sees the failing file, its original version, the error and the failing tests, never the whole repo. Company code never leaves the machine, which is the point of using an open-weight model.
 
 The mechanical step in `agent/migrate.py` is a small stand-in for [OpenRewrite](https://docs.openrewrite.org/), which has official Spring Boot 3 recipes. Swapping it in is the obvious next step.
 
@@ -52,21 +54,28 @@ Both rewrote `WebSecurityConfigurerAdapter` into a `SecurityFilterChain` bean. D
 
 **Case 2: harder, adds in-memory users, a `PasswordEncoder` and an exposed `AuthenticationManager` bean** (11 tests, with real login checks)
 
-| Model | Run | Tests after migration | Outcome |
-|---|---|---|---|
-| Qwen2.5-Coder 7B | first run | 9/11 | Failed with `StackOverflowError`; stopped early |
-| DeepSeek-Coder 6.7B | first run | 0/11 | Spring context failed to start; stopped early |
-| Qwen2.5-Coder 7B | rerun with retry fallback, 3 fix rounds | 9/11 | Still `StackOverflowError`; flagged for a human |
-| DeepSeek-Coder 6.7B | rerun with retry fallback, 3 fix rounds | 0 run | Does not compile (missing `Customizer` import); flagged for a human |
+This is what the sample app in [`sample-app/`](sample-app) contains now. Case 1 above was run on an earlier, smaller version of it (6 tests), so it can no longer be reproduced with this repo.
 
-In the first run the agent stopped before using its retries: Maven trims stack traces, so it could not tell which file to send back to the model. It now retries the files the model already edited. Even with that fix, neither 7B model solved the harder case on its own. The agent reports this honestly and leaves the failing files for a person.
+| Model | Tests after migration | Outcome |
+|---|---|---|
+| Qwen2.5-Coder 7B | **11/11 pass** | 1 model round + 1 automatic import repair, about 30 s. Reproduced in 2 runs. |
+| DeepSeek-Coder 6.7B | 8/11 | Compiles but disables HTTP Basic (`httpBasic(AbstractHttpConfigurer::disable)`) where the original enabled it, so 3 login tests fail. Same result in repeated runs; flagged for a human. |
+
+How the harder case got to this point, so the numbers are not misread: the first runs (see `reports/hard-first-run-*` and `reports/hard-rerun-*`) failed for both models. Qwen reached 9/11 with a `StackOverflowError`, and DeepSeek did not compile. We then added help to the harness, and Qwen passes with it:
+
+- cheat sheet entries for the Spring Security 6 user store and `AuthenticationManager` bean, and for the correct import packages
+- the original Spring Boot 2.7 file and the source of the failing tests in the prompt
+- an automatic import repair for known Spring Security classes, before the model is asked
+- 5 fix rounds instead of 3, an 8192-token context, and a 30-second per-test timeout
+
+So the honest reading is: **Qwen passes inside a harness that supplies this knowledge; it did not work it out unaided.** DeepSeek did not pass even with the same help. Trying randomness on retries did not help it (and made it much slower), so that was removed.
 
 ## Limits
 
 - Passing tests only proves what the tests cover.
-- 6–7B models handle the common Spring Security rewrite but struggle with interacting changes (the harder case).
-- The cheat sheet in [`agent/cheatsheet.md`](agent/cheatsheet.md) only covers the security-config change; Case 2 deliberately has no entries for its extra patterns.
-- Only tested on the included sample app.
+- 6–7B models handle the common Spring Security rewrite but struggle with interacting changes. One of the two models failed the harder case.
+- The cheat sheet and the import table in the agent are written for Spring Security 6. Supporting other migrations means extending them.
+- Case 2's cheat sheet was extended after seeing the models fail on this sample app, so its pass is not a measure of generalisation. Only tested on the included sample app.
 
 ## Run it
 
@@ -85,7 +94,7 @@ python3 agent/migrate.py
 MODEL=deepseek-coder:6.7b python3 agent/migrate.py
 ```
 
-If `mvn` is not on your PATH, set `MVN=/path/to/mvn`. Other settings: `MAX_ATTEMPTS` (default 3), `BOOT3_VERSION` (default 3.3.5), `OLLAMA_URL`, and `OPENAI_BASE_URL` / `API_KEY` for a hosted open-weight model.
+If `mvn` is not on your PATH, set `MVN=/path/to/mvn`. Other settings: `MAX_ATTEMPTS` (default 5), `BOOT3_VERSION` (default 3.3.5), `OLLAMA_URL`, and `OPENAI_BASE_URL` / `API_KEY` for a hosted open-weight model.
 
 ## Layout
 
