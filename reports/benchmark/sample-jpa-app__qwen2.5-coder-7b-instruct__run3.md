@@ -2,9 +2,9 @@
 
 - App: `sample-jpa-app`  |  Model: `qwen2.5-coder:7b-instruct`  |  Upgrade tool: OpenRewrite (rewrite-spring 6.37.1)
 - Spring Boot parent after upgrade: `3.3.13`
-- Result: **NEEDS HUMAN REVIEW (tests failing)**
-- Model fix rounds: 5 (max 5)
-- Settings: temperature 0, seed 0, 8192-token context; output fingerprint `fbb94c86cd15` (identical fingerprints across runs mean identical generated code)
+- Result: **tests PASS**
+- Model fix rounds: 1 (max 5)
+- Settings: temperature 0, seed 0, 8192-token context; output fingerprint `d0ac5c0e9568` (identical fingerprints across runs mean identical generated code)
 
 ## Build score per run
 
@@ -12,12 +12,8 @@ Score = failing tests, or 1000+ compile errors. 0 means green. A run that scores
 
 | Run | Score | Tests passed | What happened |
 |---|---|---|---|
-| 1 | 1002 | - | build; model fixed Product.java, model fixed SecurityConfig.java |
-| 2 | 1002 | - | rolled back (score 1003 is worse than 1002); model fixed Product.java, model fixed SecurityConfig.java |
-| 3 | 1002 | - | rolled back (score 1003 is worse than 1002); model fixed Product.java, model fixed SecurityConfig.java |
-| 4 | 1002 | - | rolled back (score 1003 is worse than 1002); model fixed Product.java, model fixed SecurityConfig.java |
-| 5 | 1002 | - | rolled back (score 1003 is worse than 1002); model fixed Product.java, model fixed SecurityConfig.java |
-| 6 | 1002 | - | rolled back (score 1003 is worse than 1002) |
+| 1 | 1001 | - | build; auto-repaired imports/@Override in SecurityConfig.java; model fixed Product.java |
+| 2 | 0 | all | build; auto-repaired imports/@Override in Product.java |
 
 ## Test integrity
 
@@ -26,33 +22,60 @@ Score = failing tests, or 1000+ compile errors. 0 means green. A run that scores
 - A passing run must execute exactly the baseline's tests: the original app ran 8 tests, 8 passed.
 - Result: no violations.
 
+## Security equivalence (same requests, Boot 2 build vs upgraded build)
+
+24 checks, **2 difference(s)**, of which **0 newly accessible**. Cells show the HTTP status; changed cells show before → after. 401/403 means denied; 404 means the route was not found, which is a different problem.
+
+| Endpoint | anonymous | clerk | manager |
+|---|---|---|---|
+| `DELETE /products/1` | 401 | 403 | 200 |
+| `GET /actuator/health` | 200 | 200 | 200 |
+| `GET /actuator/info` | 401 | 403 | 200 |
+| `GET /products` | 401 | 200 | 200 |
+| `GET /products/` | 401 | **200 → 404** | **200 → 404** |
+| `GET /products/1` | 401 | 200 | 200 |
+| `GET /whoami` | 200 | 200 | 200 |
+| `POST /products` | 401 | 201 | 201 |
+
+### What changed
+
+| Request | Role | Before | After | What it means |
+|---|---|---|---|---|
+| `GET /products/` | clerk | 200 | 404 | the route no longer matches; not an access-control change, but clients will break |
+| `GET /products/` | manager | 200 | 404 | the route no longer matches; not an access-control change, but clients will break |
+
+**Flagged for a human: the upgraded app answers some requests differently. Review each before deploying.**
+
 ## Diff (all changes to Java sources, including the upgrade tool's)
 ```diff
 --- a/Product.java
 +++ b/Product.java
-@@ -1,11 +1,11 @@
+@@ -1,12 +1,13 @@
  package com.example.shop;
  
++import jakarta.persistence.Column;
++
  import java.math.BigDecimal;
 -import javax.persistence.Entity;
 -import javax.persistence.GeneratedValue;
 -import javax.persistence.GenerationType;
 -import javax.persistence.Id;
 -import javax.validation.constraints.NotBlank;
+-import org.hibernate.annotations.Type;
 +import jakarta.persistence.Entity;
 +import jakarta.persistence.GeneratedValue;
 +import jakarta.persistence.GenerationType;
 +import jakarta.persistence.Id;
 +import jakarta.validation.constraints.NotBlank;
- import org.hibernate.annotations.Type;
  
  @Entity
-@@ -21,7 +21,7 @@
+ public class Product {
+@@ -21,7 +22,7 @@
      private BigDecimal price;
  
      // long free text: a plain String column would be limited to 255 characters
 -    @Type(type = "text")
-+    @Type(text.class)
++    @Column(length = 10000)
      private String description;
  
      public Long getId() { return id; }
@@ -98,7 +121,14 @@ Score = failing tests, or 1000+ compile errors. 0 means green. A run that scores
  
      @Bean
      public PasswordEncoder passwordEncoder() {
-@@ -29,17 +31,16 @@
+@@ -22,24 +24,22 @@
+     }
+ 
+     @Bean
+-    @Override
+     public UserDetailsService userDetailsService() {
+         return new InMemoryUserDetailsManager(
+             User.withUsername("clerk").password(passwordEncoder().encode("clerk123")).roles("CLERK").build(),
              User.withUsername("manager").password(passwordEncoder().encode("manager123")).roles("MANAGER").build());
      }
  
@@ -132,23 +162,4 @@ Score = failing tests, or 1000+ compile errors. 0 means green. A run that scores
 
 ## Diagnosis (written by the model; unverified, check before relying on it)
 
-The most likely issues are missing dependencies or incorrect method signatures after the Spring Boot upgrade. First, check if all required dependencies are included in your `pom.xml`. For the `Product.java` error, ensure that the `text` class is imported correctly. For the `SecurityConfig.java` error, verify that the method signatures match those of the superclass or interface it extends or implements.
-
-## Last build error (best state)
-```
-[ERROR] COMPILATION ERROR : 
-[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-jpa-app__qwen2.5-coder-7b-instruct__run3/src/main/java/com/example/shop/Product.java:[24,11] cannot find symbol
-[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-jpa-app__qwen2.5-coder-7b-instruct__run3/src/main/java/com/example/shop/SecurityConfig.java:[27,5] method does not override or implement a method from a supertype
-[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.13.0:compile (default-compile) on project shop: Compilation failure: Compilation failure: 
-[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-jpa-app__qwen2.5-coder-7b-instruct__run3/src/main/java/com/example/shop/Product.java:[24,11] cannot find symbol
-[ERROR]   symbol:   class text
-[ERROR]   location: class com.example.shop.Product
-[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-jpa-app__qwen2.5-coder-7b-instruct__run3/src/main/java/com/example/shop/SecurityConfig.java:[27,5] method does not override or implement a method from a supertype
-[ERROR] -> [Help 1]
-[ERROR] 
-[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
-[ERROR] Re-run Maven using the -X switch to enable full debug logging.
-[ERROR] 
-[ERROR] For more information about the errors and possible solutions, please read the following articles:
-[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
-```
+The most likely cause of the HTTP status code changes after upgrading to Spring Boot 3 is the removal of `WebSecurityConfigurerAdapter` and the changes in the security configuration syntax. Developers need to act by updating their security configuration to use the new `SecurityFilterChain` bean and the `authorizeHttpRequests` method instead of `authorizeRequests`. This involves modifying the security configuration class to extend `Configuration` and `EnableWebSecurity`, and replacing the deprecated methods with their new equivalents.

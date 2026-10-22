@@ -3,20 +3,23 @@
   "model": "qwen2.5-coder:7b-instruct",
   "tool": "OpenRewrite (rewrite-spring 6.37.1)",
   "boot": "3.3.13",
-  "ok": false,
-  "score": 1002,
-  "tests": null,
+  "ok": true,
+  "score": 0,
+  "tests": [
+    8,
+    8
+  ],
   "fallback_reason": null,
   "baseline_tests": [
     8,
     8
   ],
-  "output_hash": "fbb94c86cd15",
-  "newly_accessible": null,
-  "model_rounds": 5,
-  "runs": 6,
+  "output_hash": "d0ac5c0e9568",
+  "newly_accessible": 0,
+  "model_rounds": 1,
+  "runs": 2,
   "model_error": null,
-  "security_checks": null,
-  "security_diffs": null,
+  "security_checks": 24,
+  "security_diffs": 2,
   "test_files_modified": []
 }

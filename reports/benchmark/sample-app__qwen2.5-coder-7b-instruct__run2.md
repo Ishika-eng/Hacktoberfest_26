@@ -4,7 +4,7 @@
 - Spring Boot parent after upgrade: `3.3.13`
 - Result: **tests PASS**
 - Model fix rounds: 1 (max 5)
-- Settings: temperature 0, seed 0, 8192-token context; output fingerprint `44ec40c9a34f` (identical fingerprints across runs mean identical generated code)
+- Settings: temperature 0, seed 0, 8192-token context; output fingerprint `3936d680a49f` (identical fingerprints across runs mean identical generated code)
 
 ## Build score per run
 
@@ -12,9 +12,8 @@ Score = failing tests, or 1000+ compile errors. 0 means green. A run that scores
 
 | Run | Score | Tests passed | What happened |
 |---|---|---|---|
-| 1 | 1006 | - | build; model fixed SecurityConfig.java |
-| 2 | 1002 | - | build; auto-import fix in SecurityConfig.java |
-| 3 | 0 | all | build |
+| 1 | 1003 | - | build; auto-repaired imports/@Override in SecurityConfig.java; model fixed SecurityConfig.java |
+| 2 | 0 | all | build; auto-repaired imports/@Override in SecurityConfig.java |
 
 ## Test integrity
 
@@ -78,10 +77,10 @@ Score = failing tests, or 1000+ compile errors. 0 means green. A run that scores
  import org.springframework.security.config.annotation.web.builders.HttpSecurity;
  import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 -import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
- import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
- import org.springframework.security.crypto.password.PasswordEncoder;
 +import org.springframework.security.core.userdetails.User;
 +import org.springframework.security.core.userdetails.UserDetailsService;
+ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+ import org.springframework.security.crypto.password.PasswordEncoder;
 +import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 +import org.springframework.security.web.SecurityFilterChain;
  
