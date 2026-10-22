@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -37,6 +38,8 @@ OPENREWRITE_PLUGIN = os.environ.get("OPENREWRITE_PLUGIN", "6.46.1")
 OPENREWRITE_SPRING = os.environ.get("OPENREWRITE_SPRING", "6.37.1")
 OPENREWRITE_RECIPE = os.environ.get("OPENREWRITE_RECIPE", "org.openrewrite.java.spring.boot3.UpgradeSpringBoot_3_3")
 TEST_TIMEOUT = "-Djunit.jupiter.execution.timeout.default=30s"
+# Upgraded copies go outside any git repository by default: OpenRewrite skips folders that .gitignore ignores.
+OUT_ROOT = Path(os.environ.get("BOOT_UPGRADE_OUT", Path(tempfile.gettempdir()) / "boot-upgrade-out"))
 
 
 # ---------------------------------------------------------------- environment
@@ -91,13 +94,29 @@ def mechanical_upgrade(work):
             f.write_text(n)
 
 
+def git_ignored(path):
+    """True if `path` is inside a git repository that ignores it. OpenRewrite silently skips such folders."""
+    try:
+        p = subprocess.run(["git", "-C", str(path), "check-ignore", "-q", "."], capture_output=True)
+    except OSError:
+        return False
+    return p.returncode == 0
+
+
 def openrewrite_upgrade(work):
-    """Run OpenRewrite's Spring Boot 3 recipe. True if it ran and the parent is now 3.x."""
+    """Run OpenRewrite's Spring Boot 3 recipe. Returns (ok, output, reason-if-not-ok)."""
     code, out = run([MVN, "-B", "-q", f"org.openrewrite.maven:rewrite-maven-plugin:{OPENREWRITE_PLUGIN}:run",
                      f"-Drewrite.recipeArtifactCoordinates=org.openrewrite.recipe:rewrite-spring:{OPENREWRITE_SPRING}",
                      f"-Drewrite.activeRecipes={OPENREWRITE_RECIPE}"], work)
     version = boot_version(work) or ""
-    return code == 0 and version.startswith("3."), out
+    if code == 0 and version.startswith("3."):
+        return True, out, ""
+    if code == 0:
+        why = "OpenRewrite ran but changed nothing"
+        if git_ignored(work):
+            why += f"; {work} is inside a git repository that ignores it, and OpenRewrite skips ignored folders (use --work outside the repo)"
+        return False, out, why
+    return False, out, "OpenRewrite failed: " + trim(out, 400).replace("\n", " | ")
 
 
 # ---------------------------------------------------------------- test integrity
@@ -398,7 +417,7 @@ def parse_args(argv=None):
                     help="do not first run the original app's tests (needed to verify the executed-test count)")
     ap.add_argument("--endpoints", help="endpoints.json for the security check (default: <app>/endpoints.json)")
     ap.add_argument("--cve-scan", action="store_true", help="count known advisories via osv.dev (sends dependency coordinates)")
-    ap.add_argument("--work", help="where the upgraded copy goes (default: ./migrated-<app>)")
+    ap.add_argument("--work", help="where the upgraded copy goes (default: <temp dir>/boot-upgrade-out/migrated-<app>; keep it outside git repos that ignore it)")
     ap.add_argument("--report", help="report path (default: ./REPORT.md)")
     ap.add_argument("--log-dir", default=str(REPO / "runs"), help="per-round prompts and replies are saved here")
     return ap.parse_args(argv)
@@ -421,7 +440,7 @@ def main(argv=None):
     check_java()
 
     src = Path(args.app).resolve()
-    work = Path(args.work).resolve() if args.work else REPO / f"migrated-{src.name}"
+    work = Path(args.work).resolve() if args.work else OUT_ROOT / f"migrated-{src.name}"
     report_path = Path(args.report).resolve() if args.report else REPO / "REPORT.md"
     log_dir = Path(args.log_dir) / f"{src.name}-{slug(MODEL)}-{datetime.datetime.now():%Y%m%d-%H%M%S}"
     cheatsheet = load_cheatsheet()
@@ -441,13 +460,15 @@ def main(argv=None):
     tests_before_upgrade = hash_tests(work)
 
     tool = "built-in fallback"
+    fallback_reason = "OpenRewrite was disabled (--no-openrewrite)" if args.no_openrewrite else ""
     if not args.no_openrewrite:
         print(f"[1/4] OpenRewrite {OPENREWRITE_RECIPE}")
-        ok_tool, tool_out = openrewrite_upgrade(work)
+        ok_tool, tool_out, tool_why = openrewrite_upgrade(work)
         if ok_tool:
             tool = f"OpenRewrite (rewrite-spring {OPENREWRITE_SPRING})"
         else:
-            print("   OpenRewrite failed; using the built-in fallback\n   " + trim(tool_out, 500).replace("\n", "\n   "))
+            print(f"   WARNING: {tool_why}\n   Using the much weaker built-in fallback instead.")
+            fallback_reason = tool_why
             fresh_copy(src, work)
     if tool == "built-in fallback":
         print(f"[1/4] built-in upgrade -> Spring Boot {BOOT3}")
@@ -573,6 +594,7 @@ def main(argv=None):
     write_report(report_path, locals())
     summary = {"app": src.name, "model": None if MAX_ATTEMPTS == 0 else MODEL, "tool": tool, "boot": target,
                "ok": ok, "score": best[0], "tests": (final_count if ok else tests_summary(best[2])),
+               "fallback_reason": fallback_reason or None,
                "baseline_tests": baseline_count, "output_hash": output_hash(work),
                "newly_accessible": None if sec_diffs is None else sum(securitydiff.describe(b, a)[0] == "exposure" for _, b, a in sec_diffs),
                "model_rounds": model_rounds, "runs": iterations, "model_error": model_error,
@@ -593,6 +615,8 @@ def write_report(path, v):
     r = ["# Migration report", "",
          f"- App: `{src.name}`  |  Model: {'none (upgrade tool only)' if MAX_ATTEMPTS == 0 else '`' + MODEL + '`'}  |  Upgrade tool: {v['tool']}",
          f"- Spring Boot parent after upgrade: `{v['target']}`",
+         *([f"- **Warning: the built-in fallback was used, not OpenRewrite.** {v['fallback_reason']}"]
+           if v["tool"] == "built-in fallback" and v["fallback_reason"] and not v["fallback_reason"].startswith("OpenRewrite was disabled") else []),
          f"- Result: **{verdict}**",
          f"- Model fix rounds: {v['model_rounds']} (max {MAX_ATTEMPTS})",
          f"- Settings: temperature 0, seed 0, 8192-token context; output fingerprint `{output_hash(work)}` "

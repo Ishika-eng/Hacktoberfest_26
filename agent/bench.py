@@ -15,12 +15,14 @@ import re
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
 OUT = REPO / "reports" / "benchmark"
+WORK_ROOT = Path(tempfile.gettempdir()) / "boot-upgrade-bench"  # outside the repo: OpenRewrite skips git-ignored folders
 
 
 def hardware():
@@ -86,7 +88,7 @@ def run_one(app, model, repeat=1, repeats=1):
     name = f"{slug(app)}__{slug(model) if model else 'upgrade-tool-only'}" + (f"__run{repeat}" if repeats > 1 else "")
     report = OUT / f"{name}.md"
     cmd = [sys.executable, "-I", str(ROOT / "migrate.py"), str(REPO / app), "--report", str(report),
-           "--work", str(REPO / f"migrated-{name}"), "--log-dir", str(OUT / "logs")]
+           "--work", str(WORK_ROOT / f"migrated-{name}"), "--log-dir", str(OUT / "logs")]
     spec = ROOT / "heldout" / f"{Path(app).name}.endpoints.json"
     if app.startswith("heldout/") and spec.exists():
         cmd += ["--endpoints", str(spec)]
@@ -162,6 +164,9 @@ def write_markdown(results, path, extra=""):
     models = [m for m in dict.fromkeys(r["model"] for r in results) if m]
     details = "\n".join(f"- `{m}`: {model_details(m)}" for m in models)
     version = code_version()
+    used_fallback = [r for r in results if r.get("tool", "").startswith("built-in") and r.get("fallback_reason")
+                     and not r["fallback_reason"].startswith("OpenRewrite was disabled")]
+    fallback_warning = (f"\n**Warning: {len(used_fallback)} run(s) used the built-in fallback because OpenRewrite failed** (for example the held-out app, which has Gradle files). Those rows are not OpenRewrite results; see each report." if used_fallback else "")
     dirty_note = " (**warning: uncommitted changes in agent/ when this ran**)" if version[2] else ""
     held = [a for a in dict.fromkeys(r["app"] for r in results) if a.startswith("heldout/")]
     held_note = ("\n**Held-out apps** (not written by us, pinned commits in `agent/heldout/manifest.json`): "
@@ -176,7 +181,7 @@ Each row is one model on one app, run several times with `agent/migrate.py`. Gen
 **Ollama:** {ollama_version()}
 **Models:**
 {details}
-**Upgrade tool:** OpenRewrite `UpgradeSpringBoot_3_3` (rewrite-spring 6.37.1), then the model fixes what is left.
+**Upgrade tool:** OpenRewrite `UpgradeSpringBoot_3_3` (rewrite-spring 6.37.1), then the model fixes what is left.{fallback_warning}
 **Sampling:** temperature 0, seed 0, 8192-token context, up to 5 model rounds, 30 s per-test timeout.
 {held_note}
 {table(results)}

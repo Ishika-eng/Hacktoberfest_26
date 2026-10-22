@@ -23,6 +23,7 @@ def load(name):
 migrate = load("migrate")
 securitydiff = load("securitydiff")
 bench = load("bench")
+compare = load("compare")
 cves = load("cves")
 
 
@@ -522,6 +523,59 @@ class BenchmarkTable(unittest.TestCase):
         text = bench.table(runs)
         self.assertIn("| `a` | m | 1/2 | 11/11, 9/11 | 1, 5 | 130 s | 0/18, - | unknown |", text)
         self.assertIn("none (upgrade tool only) | 0/1 | -", text)
+
+
+class GitIgnoredFolders(unittest.TestCase):
+    """OpenRewrite silently skips git-ignored folders; the agent must notice and say so."""
+
+    def test_detects_a_folder_inside_a_repo_that_ignores_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess = __import__("subprocess")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            (repo / ".gitignore").write_text("out/\n")
+            (repo / "out").mkdir()
+            (repo / "kept").mkdir()
+            self.assertTrue(migrate.git_ignored(repo / "out"))
+            self.assertFalse(migrate.git_ignored(repo / "kept"))
+
+    def test_a_folder_outside_any_repo_is_not_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(migrate.git_ignored(Path(tmp)))
+
+    def test_exit_zero_without_a_version_bump_is_reported_as_no_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "pom.xml").write_text("<parent><artifactId>spring-boot-starter-parent</artifactId><version>2.7.18</version></parent>")
+            saved = migrate.run
+            migrate.run = lambda cmd, cwd: (0, "")
+            self.addCleanup(lambda: setattr(migrate, "run", saved))
+            ok, _, why = migrate.openrewrite_upgrade(work)
+            self.assertFalse(ok)
+            self.assertIn("changed nothing", why)
+
+    def test_default_work_folder_is_outside_the_repository(self):
+        self.assertNotIn(str(migrate.REPO), str(migrate.OUT_ROOT))
+
+
+class ComparisonTable(unittest.TestCase):
+    def test_says_when_openrewrite_did_not_run(self):
+        cells = dict(compare.column({"tool": "built-in fallback", "ok": False, "score": 1006}, 12))
+        self.assertIn("did NOT run", cells["Upgrade tool"])
+        self.assertEqual(cells["Compiles"], "NO (6 compile errors)")
+        self.assertEqual(cells["Tests passed"], "none ran")
+
+    def test_a_passing_run(self):
+        cells = dict(compare.column({"tool": "OpenRewrite (rewrite-spring 6.37.1)", "ok": True, "score": 0, "tests": [11, 11],
+                                     "model_rounds": 2, "security_diffs": 0, "security_checks": 18}, 62))
+        self.assertEqual(cells["Upgrade tool"], "OpenRewrite")
+        self.assertEqual(cells["Tests passed"], "11/11")
+        self.assertEqual(cells["Security answers that changed"], "0 of 18")
+
+    def test_diff_is_cut_to_the_limit(self):
+        lines = compare.unified("\n".join(str(i) for i in range(100)), "\n".join(str(i + 1) for i in range(100)), "A.java", limit=5)
+        self.assertEqual(len(lines), 6)
+        self.assertIn("more lines", lines[-1])
 
 
 class BenchmarkDetails(unittest.TestCase):
