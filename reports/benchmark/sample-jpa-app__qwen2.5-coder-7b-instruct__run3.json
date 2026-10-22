@@ -1,18 +1,22 @@
 {
   "app": "sample-jpa-app",
   "model": "qwen2.5-coder:7b-instruct",
-  "tool": "built-in fallback",
-  "boot": "3.3.5",
-  "ok": true,
-  "score": 0,
-  "tests": [
+  "tool": "OpenRewrite (rewrite-spring 6.37.1)",
+  "boot": "3.3.13",
+  "ok": false,
+  "score": 1002,
+  "tests": null,
+  "fallback_reason": null,
+  "baseline_tests": [
     8,
     8
   ],
-  "model_rounds": 1,
-  "runs": 3,
+  "output_hash": "fbb94c86cd15",
+  "newly_accessible": null,
+  "model_rounds": 5,
+  "runs": 6,
   "model_error": null,
-  "security_checks": 24,
-  "security_diffs": 2,
+  "security_checks": null,
+  "security_diffs": null,
   "test_files_modified": []
 }

@@ -1,11 +1,18 @@
 {
   "app": "sample-app",
   "model": null,
-  "tool": "built-in fallback",
-  "boot": "3.3.5",
+  "tool": "OpenRewrite (rewrite-spring 6.37.1)",
+  "boot": "3.3.13",
   "ok": false,
-  "score": 1007,
+  "score": 1006,
   "tests": null,
+  "fallback_reason": null,
+  "baseline_tests": [
+    11,
+    11
+  ],
+  "output_hash": "a0c4ca7b5e47",
+  "newly_accessible": null,
   "model_rounds": 0,
   "runs": 1,
   "model_error": null,

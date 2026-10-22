@@ -1,11 +1,18 @@
 {
   "app": "sample-jpa-app",
   "model": null,
-  "tool": "built-in fallback",
-  "boot": "3.3.5",
+  "tool": "OpenRewrite (rewrite-spring 6.37.1)",
+  "boot": "3.3.13",
   "ok": false,
-  "score": 1007,
+  "score": 1002,
   "tests": null,
+  "fallback_reason": null,
+  "baseline_tests": [
+    8,
+    8
+  ],
+  "output_hash": "fbb94c86cd15",
+  "newly_accessible": null,
   "model_rounds": 0,
   "runs": 1,
   "model_error": null,

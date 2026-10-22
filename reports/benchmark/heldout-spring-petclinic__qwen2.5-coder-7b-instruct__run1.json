@@ -1,0 +1,22 @@
+{
+  "app": "spring-petclinic",
+  "model": "qwen2.5-coder:7b-instruct",
+  "tool": "built-in fallback",
+  "boot": "3.3.5",
+  "ok": false,
+  "score": 500,
+  "tests": null,
+  "fallback_reason": "OpenRewrite failed: [ERROR] Failed to execute goal org.openrewrite.maven:rewrite-maven-plugin:6.46.1:run (default-cli) on project spring-petclinic: Execution default-cli of goal org.openrewrite.maven:rewrite-maven-plugin:6.46.1:run failed: Failed to download https://downloads.gradle.org/distributions/gradle-7.6.6-bin.zip to artifact cache -> [Help 1] | [ERROR]  | [ERROR] To see the full stack trace of the errors, re-run ",
+  "baseline_tests": [
+    41,
+    40
+  ],
+  "output_hash": "924d0578148d",
+  "newly_accessible": null,
+  "model_rounds": 5,
+  "runs": 6,
+  "model_error": null,
+  "security_checks": null,
+  "security_diffs": null,
+  "test_files_modified": []
+}

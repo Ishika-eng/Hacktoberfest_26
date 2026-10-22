@@ -1,9 +1,10 @@
 # Migration report
 
-- App: `sample-jpa-app`  |  Model: `qwen2.5-coder:7b-instruct`  |  Upgrade tool: built-in fallback
-- Spring Boot parent after upgrade: `3.3.5`
-- Result: **tests PASS**
-- Model fix rounds: 1 (max 5)
+- App: `sample-jpa-app`  |  Model: `qwen2.5-coder:7b-instruct`  |  Upgrade tool: OpenRewrite (rewrite-spring 6.37.1)
+- Spring Boot parent after upgrade: `3.3.13`
+- Result: **NEEDS HUMAN REVIEW (tests failing)**
+- Model fix rounds: 5 (max 5)
+- Settings: temperature 0, seed 0, 8192-token context; output fingerprint `fbb94c86cd15` (identical fingerprints across runs mean identical generated code)
 
 ## Build score per run
 
@@ -11,36 +12,25 @@ Score = failing tests, or 1000+ compile errors. 0 means green. A run that scores
 
 | Run | Score | Tests passed | What happened |
 |---|---|---|---|
-| 1 | 1007 | - | build; model fixed SecurityConfig.java, model fixed Product.java |
-| 2 | 1002 | - | build; auto-import fix in SecurityConfig.java |
-| 3 | 0 | all | build |
+| 1 | 1002 | - | build; model fixed Product.java, model fixed SecurityConfig.java |
+| 2 | 1002 | - | rolled back (score 1003 is worse than 1002); model fixed Product.java, model fixed SecurityConfig.java |
+| 3 | 1002 | - | rolled back (score 1003 is worse than 1002); model fixed Product.java, model fixed SecurityConfig.java |
+| 4 | 1002 | - | rolled back (score 1003 is worse than 1002); model fixed Product.java, model fixed SecurityConfig.java |
+| 5 | 1002 | - | rolled back (score 1003 is worse than 1002); model fixed Product.java, model fixed SecurityConfig.java |
+| 6 | 1002 | - | rolled back (score 1003 is worse than 1002) |
 
 ## Test integrity
 
-Existing test files are never written by the agent; their hashes are checked after the upgrade tool runs and again at the end. Result: unchanged.
-
-## Security equivalence (same requests, Boot 2 build vs upgraded build)
-
-24 checks, **2 difference(s)**. Cells show the HTTP status; changed cells show before → after.
-
-| Endpoint | anonymous | clerk | manager |
-|---|---|---|---|
-| `DELETE /products/1` | 401 | 403 | 200 |
-| `GET /actuator/health` | 200 | 200 | 200 |
-| `GET /actuator/info` | 401 | 403 | 200 |
-| `GET /products` | 401 | 200 | 200 |
-| `GET /products/` | 401 | **200 → 404** | **200 → 404** |
-| `GET /products/1` | 401 | 200 | 200 |
-| `GET /whoami` | 200 | 200 | 200 |
-| `POST /products` | 401 | 201 | 201 |
-
-**Flagged for a human: the upgraded app answers some requests differently. Review each before deploying.**
+- Existing files under `src/test` (tests and test resources) and every `pom.xml` / `.mvn` file are hashed after the upgrade tool runs and again at the end. The fix loop can only write under `src/main`.
+- The upgraded pom must not gain test-skipping settings (`skipTests`, `maven.test.skip`, `testFailureIgnore`, surefire `skip` or excludes).
+- A passing run must execute exactly the baseline's tests: the original app ran 8 tests, 8 passed.
+- Result: no violations.
 
 ## Diff (all changes to Java sources, including the upgrade tool's)
 ```diff
 --- a/Product.java
 +++ b/Product.java
-@@ -1,12 +1,11 @@
+@@ -1,11 +1,11 @@
  package com.example.shop;
  
  import java.math.BigDecimal;
@@ -49,21 +39,20 @@ Existing test files are never written by the agent; their hashes are checked aft
 -import javax.persistence.GenerationType;
 -import javax.persistence.Id;
 -import javax.validation.constraints.NotBlank;
--import org.hibernate.annotations.Type;
 +import jakarta.persistence.Entity;
 +import jakarta.persistence.GeneratedValue;
 +import jakarta.persistence.GenerationType;
 +import jakarta.persistence.Id;
 +import jakarta.validation.constraints.NotBlank;
+ import org.hibernate.annotations.Type;
  
  @Entity
- public class Product {
-@@ -21,7 +20,7 @@
+@@ -21,7 +21,7 @@
      private BigDecimal price;
  
      // long free text: a plain String column would be limited to 255 characters
 -    @Type(type = "text")
-+    @jakarta.persistence.Column(length = 10000)
++    @Type(text.class)
      private String description;
  
      public Long getId() { return id; }
@@ -84,17 +73,14 @@ Existing test files are never written by the agent; their hashes are checked aft
 
 --- a/SecurityConfig.java
 +++ b/SecurityConfig.java
-@@ -1,20 +1,25 @@
+@@ -1,20 +1,22 @@
  package com.example.shop;
 +
-+import org.springframework.security.authentication.AuthenticationManager;
-+
-+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
++import static org.springframework.security.config.Customizer.withDefaults;
  
  import org.springframework.context.annotation.Bean;
  import org.springframework.context.annotation.Configuration;
  import org.springframework.http.HttpMethod;
-+import org.springframework.security.config.Customizer;
  import org.springframework.security.config.annotation.web.builders.HttpSecurity;
  import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 -import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
@@ -112,18 +98,8 @@ Existing test files are never written by the agent; their hashes are checked aft
  
      @Bean
      public PasswordEncoder passwordEncoder() {
-@@ -22,24 +27,29 @@
-     }
- 
-     @Bean
--    @Override
--    public UserDetailsService userDetailsService() {
-+    public UserDetailsService userDetailsService(PasswordEncoder encoder) {
-         return new InMemoryUserDetailsManager(
--            User.withUsername("clerk").password(passwordEncoder().encode("clerk123")).roles("CLERK").build(),
--            User.withUsername("manager").password(passwordEncoder().encode("manager123")).roles("MANAGER").build());
-+            User.withUsername("clerk").password(encoder.encode("clerk123")).roles("CLERK").build(),
-+            User.withUsername("manager").password(encoder.encode("manager123")).roles("MANAGER").build());
+@@ -29,17 +31,16 @@
+             User.withUsername("manager").password(passwordEncoder().encode("manager123")).roles("MANAGER").build());
      }
  
 -    @Override
@@ -135,25 +111,19 @@ Existing test files are never written by the agent; their hashes are checked aft
 -                .antMatchers(HttpMethod.POST, "/products").hasAnyRole("CLERK", "MANAGER")
 -                .antMatchers(HttpMethod.DELETE, "/products/**").hasRole("MANAGER")
 -                .antMatchers("/actuator/**").hasRole("MANAGER")
-+    @Bean
-+    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
-+        return config.getAuthenticationManager();
-+    }
-+
-+    @Bean
-+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-+        http.csrf(csrf -> csrf.disable())
-+            .authorizeHttpRequests(auth -> auth
-+                .requestMatchers("/actuator/health").permitAll()
-+                .requestMatchers("/whoami").permitAll()
-+                .requestMatchers(HttpMethod.POST, "/products").hasAnyRole("CLERK", "MANAGER")
-+                .requestMatchers(HttpMethod.DELETE, "/products/**").hasRole("MANAGER")
-+                .requestMatchers("/actuator/**").hasRole("MANAGER")
-                 .anyRequest().authenticated()
+-                .anyRequest().authenticated()
 -            .and()
 -            .httpBasic();
-+            )
-+            .httpBasic(Customizer.withDefaults());
++    @Bean SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
++        http.csrf(csrf -> csrf.disable())
++                .authorizeHttpRequests(requests -> requests
++                        .requestMatchers("/actuator/health").permitAll()
++                        .requestMatchers("/whoami").permitAll()
++                        .requestMatchers(HttpMethod.POST, "/products").hasAnyRole("CLERK", "MANAGER")
++                        .requestMatchers(HttpMethod.DELETE, "/products/**").hasRole("MANAGER")
++                        .requestMatchers("/actuator/**").hasRole("MANAGER")
++                        .anyRequest().authenticated())
++                .httpBasic(withDefaults());
 +        return http.build();
      }
  }
@@ -162,4 +132,23 @@ Existing test files are never written by the agent; their hashes are checked aft
 
 ## Diagnosis (written by the model; unverified, check before relying on it)
 
-The most likely cause of the different HTTP status codes after upgrading to Spring Boot 3 is the change in how Spring Security handles request matching and authorization. Specifically, the removal of `WebSecurityConfigurerAdapter` and the need to use `@Bean SecurityFilterChain` with `authorizeHttpRequests` and `requestMatchers` instead of `authorizeRequests` and `antMatchers` can lead to misconfigurations if not handled correctly. Developers need to carefully review and update their security configuration to ensure that the new syntax and methods are used properly, and that all endpoints are correctly authorized.
+The most likely issues are missing dependencies or incorrect method signatures after the Spring Boot upgrade. First, check if all required dependencies are included in your `pom.xml`. For the `Product.java` error, ensure that the `text` class is imported correctly. For the `SecurityConfig.java` error, verify that the method signatures match those of the superclass or interface it extends or implements.
+
+## Last build error (best state)
+```
+[ERROR] COMPILATION ERROR : 
+[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-jpa-app__qwen2.5-coder-7b-instruct__run3/src/main/java/com/example/shop/Product.java:[24,11] cannot find symbol
+[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-jpa-app__qwen2.5-coder-7b-instruct__run3/src/main/java/com/example/shop/SecurityConfig.java:[27,5] method does not override or implement a method from a supertype
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.13.0:compile (default-compile) on project shop: Compilation failure: Compilation failure: 
+[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-jpa-app__qwen2.5-coder-7b-instruct__run3/src/main/java/com/example/shop/Product.java:[24,11] cannot find symbol
+[ERROR]   symbol:   class text
+[ERROR]   location: class com.example.shop.Product
+[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-jpa-app__qwen2.5-coder-7b-instruct__run3/src/main/java/com/example/shop/SecurityConfig.java:[27,5] method does not override or implement a method from a supertype
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+```

@@ -1,9 +1,10 @@
 # Migration report
 
-- App: `sample-app`  |  Model: `qwen2.5-coder:7b-instruct`  |  Upgrade tool: built-in fallback
-- Spring Boot parent after upgrade: `3.3.5`
+- App: `sample-app`  |  Model: `qwen2.5-coder:7b-instruct`  |  Upgrade tool: OpenRewrite (rewrite-spring 6.37.1)
+- Spring Boot parent after upgrade: `3.3.13`
 - Result: **tests PASS**
-- Model fix rounds: 2 (max 5)
+- Model fix rounds: 1 (max 5)
+- Settings: temperature 0, seed 0, 8192-token context; output fingerprint `44ec40c9a34f` (identical fingerprints across runs mean identical generated code)
 
 ## Build score per run
 
@@ -11,19 +12,20 @@ Score = failing tests, or 1000+ compile errors. 0 means green. A run that scores
 
 | Run | Score | Tests passed | What happened |
 |---|---|---|---|
-| 1 | 1007 | - | build; model fixed SecurityConfig.java |
-| 2 | 1003 | - | build; auto-import fix in SecurityConfig.java |
-| 3 | 1001 | - | build; model fixed SecurityConfig.java |
-| 4 | 1001 | - | build; auto-import fix in SecurityConfig.java |
-| 5 | 0 | all | build |
+| 1 | 1006 | - | build; model fixed SecurityConfig.java |
+| 2 | 1002 | - | build; auto-import fix in SecurityConfig.java |
+| 3 | 0 | all | build |
 
 ## Test integrity
 
-Existing test files are never written by the agent; their hashes are checked after the upgrade tool runs and again at the end. Result: unchanged.
+- Existing files under `src/test` (tests and test resources) and every `pom.xml` / `.mvn` file are hashed after the upgrade tool runs and again at the end. The fix loop can only write under `src/main`.
+- The upgraded pom must not gain test-skipping settings (`skipTests`, `maven.test.skip`, `testFailureIgnore`, surefire `skip` or excludes).
+- A passing run must execute exactly the baseline's tests: the original app ran 11 tests, 11 passed.
+- Result: no violations.
 
 ## Security equivalence (same requests, Boot 2 build vs upgraded build)
 
-18 checks, **0 difference(s)**. Cells show the HTTP status; changed cells show before → after.
+18 checks, **0 difference(s)**, of which **0 newly accessible**. Cells show the HTTP status; changed cells show before → after. 401/403 means denied; 404 means the route was not found, which is a different problem.
 
 | Endpoint | anonymous | user | admin |
 |---|---|---|---|
@@ -62,33 +64,26 @@ Existing test files are never written by the agent; their hashes are checked aft
 
 --- a/SecurityConfig.java
 +++ b/SecurityConfig.java
-@@ -1,46 +1,54 @@
+@@ -1,4 +1,8 @@
  package com.example.demo;
 +
-+import org.springframework.security.authentication.AuthenticationManager;
-+
 +import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
-+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-+import org.springframework.security.config.annotation.web.configurers.CsrfConfigurer;
-+import org.springframework.security.config.annotation.web.configurers.HttpBasicConfigurer;
-+import org.springframework.security.core.userdetails.User;
-+import org.springframework.security.core.userdetails.UserDetailsService;
-+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-+import org.springframework.security.crypto.password.PasswordEncoder;
-+import org.springframework.security.provisioning.InMemoryUserDetailsManager;
-+import org.springframework.security.web.SecurityFilterChain;
++
++import static org.springframework.security.config.Customizer.withDefaults;
  
  import org.springframework.context.annotation.Bean;
  import org.springframework.context.annotation.Configuration;
--import org.springframework.security.authentication.AuthenticationManager;
--import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
--import org.springframework.security.config.annotation.web.builders.HttpSecurity;
--import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+@@ -6,41 +10,43 @@
+ import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
+ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+ import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 -import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
--import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
--import org.springframework.security.crypto.password.PasswordEncoder;
-+import org.springframework.security.config.Customizer;
+ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+ import org.springframework.security.crypto.password.PasswordEncoder;
++import org.springframework.security.core.userdetails.User;
++import org.springframework.security.core.userdetails.UserDetailsService;
++import org.springframework.security.provisioning.InMemoryUserDetailsManager;
++import org.springframework.security.web.SecurityFilterChain;
  
  @Configuration
  @EnableWebSecurity
@@ -128,17 +123,17 @@ Existing test files are never written by the agent; their hashes are checked aft
 -            .authorizeRequests()
 -                .antMatchers("/public/**").permitAll()
 -                .antMatchers("/admin/**").hasRole("ADMIN")
+-                .anyRequest().authenticated()
+-            .and()
+-            .httpBasic();
 +    @Bean
 +    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
 +        http.csrf(csrf -> csrf.disable())
-+            .authorizeHttpRequests(auth -> auth
++            .authorizeHttpRequests(requests -> requests
 +                .requestMatchers("/public/**").permitAll()
 +                .requestMatchers("/admin/**").hasRole("ADMIN")
-                 .anyRequest().authenticated()
--            .and()
--            .httpBasic();
-+            )
-+            .httpBasic(Customizer.withDefaults());
++                .anyRequest().authenticated())
++            .httpBasic(withDefaults());
 +        return http.build();
      }
  }
