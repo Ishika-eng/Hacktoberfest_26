@@ -1,0 +1,17 @@
+{
+  "users": {
+    "anonymous": null,
+    "clerk": ["clerk", "clerk123"],
+    "manager": ["manager", "manager123"]
+  },
+  "endpoints": [
+    {"method": "GET", "path": "/actuator/health"},
+    {"method": "GET", "path": "/actuator/info"},
+    {"method": "GET", "path": "/whoami"},
+    {"method": "GET", "path": "/products"},
+    {"method": "GET", "path": "/products/"},
+    {"method": "POST", "path": "/products", "json": {"name": "pen", "price": 1.5, "description": "blue"}},
+    {"method": "GET", "path": "/products/1"},
+    {"method": "DELETE", "path": "/products/1"}
+  ]
+}
