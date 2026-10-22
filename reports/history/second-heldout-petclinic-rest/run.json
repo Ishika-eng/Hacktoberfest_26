@@ -1,0 +1,22 @@
+{
+  "app": "spring-petclinic-rest",
+  "model": "qwen2.5-coder:7b-instruct",
+  "tool": "OpenRewrite (rewrite-spring 6.37.1)",
+  "boot": "3.3.13",
+  "ok": false,
+  "score": 1100,
+  "tests": null,
+  "fallback_reason": null,
+  "baseline_tests": [
+    172,
+    172
+  ],
+  "output_hash": "0542475cf487",
+  "newly_accessible": null,
+  "model_rounds": 0,
+  "runs": 1,
+  "model_error": null,
+  "security_checks": null,
+  "security_diffs": null,
+  "test_files_modified": []
+}
