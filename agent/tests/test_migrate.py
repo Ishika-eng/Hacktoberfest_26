@@ -137,6 +137,43 @@ class FindingBrokenFiles(unittest.TestCase):
         self.assertEqual(migrate.broken_files("all good", self.work), [])
 
 
+class ChoosingFiles(unittest.TestCase):
+    """Test failures must not be blamed on the application classes that only show up in stack traces."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.work = Path(self.tmp.name)
+        main = self.work / "src" / "main" / "java"
+        main.mkdir(parents=True)
+        self.files = {n: main / f"{n}.java" for n in ("SecurityConfig", "Order", "ShopApplication")}
+        for n, f in self.files.items():
+            f.write_text(f"class {n} {{}}")
+        self.originals = {f: f.read_text() for f in self.files.values()}
+        # a stack trace that mentions the application class and not the culprit
+        self.trace = "at com.example.ShopApplication.main(ShopApplication.java:9)\nStatus expected:<401> but was:<403>"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_compile_errors_use_the_named_file(self):
+        out = f"[ERROR] {self.files['Order']}:[3,4] cannot find symbol"
+        chosen = migrate.choose_files(1001, out, self.work, [self.files["SecurityConfig"]], self.originals)
+        self.assertEqual(chosen, [self.files["Order"]])
+
+    def test_test_failures_go_back_to_files_the_model_edited(self):
+        chosen = migrate.choose_files(3, self.trace, self.work, [self.files["SecurityConfig"]], self.originals)
+        self.assertEqual(chosen, [self.files["SecurityConfig"]])  # not ShopApplication from the trace
+
+    def test_without_edits_prefer_files_the_upgrade_tool_changed(self):
+        self.files["Order"].write_text("class Order { /* upgraded */ }")
+        chosen = migrate.choose_files(3, self.trace, self.work, [], self.originals)
+        self.assertEqual(chosen, [self.files["Order"]])
+
+    def test_the_stack_trace_guess_is_the_last_resort(self):
+        chosen = migrate.choose_files(3, self.trace, self.work, [], self.originals)
+        self.assertEqual(chosen, [self.files["ShopApplication"]])
+
+
 class FailingTests(unittest.TestCase):
     def test_returns_the_test_method_source(self):
         with tempfile.TemporaryDirectory() as tmp:

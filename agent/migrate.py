@@ -217,6 +217,24 @@ def broken_files(output, work):
     return [p for p in sources if p.stem in words][:3]
 
 
+def choose_files(score, out, work, edited, originals):
+    """Which files to hand to the model.
+
+    Compile errors name their file. Test failures do not: the stack trace points at framework glue and at
+    application classes that merely ran. So for test failures prefer the files the model already edited (a
+    behaviour regression most likely comes from its own rewrite), then files the upgrade tool changed, and
+    use the stack-trace guess only when nothing else is known.
+    """
+    named = broken_files(out, work)
+    still_there = [f for f in edited if f.exists()]
+    if score >= 1000:  # compile errors
+        return named or still_there
+    if still_there:
+        return still_there
+    changed = [f for f in sorted((work / "src" / "main").rglob("*.java")) if f.read_text() != originals.get(f, "")]
+    return [f for f in changed if f in named] or changed[:3] or named
+
+
 def trim(output, limit=3500):
     lines = [ln for ln in output.splitlines() if "ERROR" in ln or "FAIL" in ln or "Caused by" in ln]
     return "\n".join(lines)[:limit] or output[-limit:]
@@ -421,9 +439,7 @@ def main(argv=None):
         if model_rounds >= MAX_ATTEMPTS or iterations > MAX_ATTEMPTS * 3 + 3:
             break
 
-        files = broken_files(out, work)
-        if not files:  # Maven trims stack traces: fall back to what the model already touched
-            files = [f for f in edited if f.exists()]
+        files = choose_files(score, out, work, edited, originals)
         if not files:
             print("   no source file identified in the error; stopping")
             break
