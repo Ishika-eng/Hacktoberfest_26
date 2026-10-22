@@ -32,12 +32,16 @@ The mechanical step in `agent/migrate.py` is a small stand-in for [OpenRewrite](
 
 ## Models used
 
-| Model | Run through | Model card (licence and terms) |
-|---|---|---|
-| Qwen2.5-Coder 7B Instruct (`qwen2.5-coder:7b-instruct`) | Ollama | https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct |
-| DeepSeek-Coder 6.7B (`deepseek-coder:6.7b`) | Ollama | https://huggingface.co/deepseek-ai/deepseek-coder-6.7b-instruct |
+| Model | Run through | Licence | Model card |
+|---|---|---|---|
+| Qwen2.5-Coder 7B Instruct (`qwen2.5-coder:7b-instruct`) | Ollama | [Apache 2.0](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct/blob/main/LICENSE) (open source) | [Hugging Face](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct) |
+| DeepSeek-Coder 6.7B (`deepseek-coder:6.7b`) | Ollama | [DeepSeek License Agreement v1.0](https://github.com/deepseek-ai/deepseek-coder/blob/main/LICENSE-MODEL) (open-weight, not open source) | [Hugging Face](https://huggingface.co/deepseek-ai/deepseek-coder-6.7b-instruct) |
 
-Check each model card for its licence terms before reusing the weights. The model is a setting (`MODEL=...`), and any OpenAI-compatible endpoint can be used instead with `OPENAI_BASE_URL`.
+- **Qwen2.5-Coder** is under the standard Apache 2.0 licence: commercial use and redistribution are allowed with the usual notices.
+- **DeepSeek-Coder** is open-weight under a custom licence. Commercial use is allowed, but the licence has use restrictions (for example no military use and no harmful or fully automated decisions) that must be passed on to anyone you redistribute the model or derivatives to. It is governed by PRC law.
+- Licence details were read from the model cards on 22 Oct 2026 (card pages and licence texts); re-check them before redistributing weights. The cards describe the Hugging Face Instruct models; we run the Ollama tags above and have not checked that they are byte-identical to those releases.
+
+The model is a setting (`MODEL=...`), and any OpenAI-compatible endpoint can be used instead with `OPENAI_BASE_URL`.
 
 ## Results
 
