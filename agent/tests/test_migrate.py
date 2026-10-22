@@ -55,6 +55,43 @@ class Scoring(unittest.TestCase):
         self.assertEqual(migrate.tests_summary(out), (11, 9))
 
 
+class BuildFileGuards(unittest.TestCase):
+    def test_detects_settings_that_skip_tests(self):
+        self.assertEqual(migrate.test_skipping_markers("<project><skipTests>true</skipTests></project>"), ["skipTests"])
+        self.assertEqual(migrate.test_skipping_markers("<testFailureIgnore>true</testFailureIgnore>"), ["testFailureIgnore"])
+        self.assertIn("maven.test.skip", migrate.test_skipping_markers("<maven.test.skip>true</maven.test.skip>"))
+        self.assertEqual(migrate.test_skipping_markers("<project><skipTests>false</skipTests></project>"), [])
+
+    def test_hashes_every_pom_and_mvn_file_but_not_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Path(tmp)
+            (w / "pom.xml").write_text("a")
+            (w / "mod").mkdir()
+            (w / "mod" / "pom.xml").write_text("b")
+            (w / ".mvn").mkdir()
+            (w / ".mvn" / "maven.config").write_text("-DskipTests")
+            (w / "target").mkdir()
+            (w / "target" / "pom.xml").write_text("ignored")
+            self.assertEqual(sorted(migrate.hash_build_files(w)), [".mvn/maven.config", "mod/pom.xml", "pom.xml"])
+
+    def test_test_resources_are_covered_by_the_test_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Path(tmp)
+            (w / "src" / "test" / "resources").mkdir(parents=True)
+            (w / "src" / "test" / "resources" / "application.properties").write_text("x=1")
+            self.assertIn("src/test/resources/application.properties", migrate.hash_tests(w))
+
+    def test_output_hash_changes_with_the_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Path(tmp)
+            (w / "src" / "main").mkdir(parents=True)
+            (w / "src" / "main" / "A.java").write_text("class A {}")
+            first = migrate.output_hash(w)
+            self.assertEqual(first, migrate.output_hash(w))
+            (w / "src" / "main" / "A.java").write_text("class A { }")
+            self.assertNotEqual(first, migrate.output_hash(w))
+
+
 class CountingTests(unittest.TestCase):
     def test_reads_surefire_reports(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -62,7 +99,8 @@ class CountingTests(unittest.TestCase):
             d.mkdir(parents=True)
             (d / "TEST-A.xml").write_text('<testsuite name="A" tests="6" errors="0" skipped="0" failures="0">')
             (d / "TEST-B.xml").write_text('<testsuite name="B" tests="5" errors="1" skipped="0" failures="1">')
-            self.assertEqual(migrate.count_tests(Path(tmp)), (11, 9))
+            (d / "TEST-C.xml").write_text('<testsuite name="C" tests="2" errors="0" skipped="2" failures="0">')
+            self.assertEqual(migrate.count_tests(Path(tmp)), (13, 9))  # the 2 skipped tests do not count as passed
             self.assertIsNone(migrate.count_tests(Path(tmp) / "nowhere"))
 
 
@@ -277,12 +315,22 @@ class FakeApp:
         self.prompts = []
         self.builds = 0
         self.tamper = False
+        self.pom_tamper = False
+        self.test_counts = []  # tests executed by each green build (default 1)
 
     def fake_run(self, cmd, cwd):
         self.builds += 1
         if self.tamper:
             (Path(cwd) / "src" / "test" / "java" / "T.java").write_text("class T { /* edited */ }")
+        if self.pom_tamper and self.builds > 1:
+            pom = Path(cwd) / "pom.xml"
+            pom.write_text(pom.read_text() + "<skipTests>true</skipTests>")
         out = self.outputs.pop(0).replace("{FILE}", str(Path(cwd) / "src" / "main" / "java" / "S.java"))
+        if out == "OK":
+            n = self.test_counts.pop(0) if self.test_counts else 1
+            reports = Path(cwd) / "target" / "surefire-reports"
+            reports.mkdir(parents=True, exist_ok=True)
+            (reports / "TEST-T.xml").write_text(f'<testsuite name="T" tests="{n}" errors="0" skipped="0" failures="0">')
         return (0 if out == "OK" else 1), out
 
 
@@ -290,11 +338,14 @@ class AgentLoop(unittest.TestCase):
     COMPILE_1 = "[ERROR] COMPILATION ERROR :\n[ERROR] {FILE}:[1,1] cannot find symbol\n"
     COMPILE_3 = COMPILE_1 + "[ERROR] {FILE}:[2,1] x\n[ERROR] {FILE}:[3,1] y\n"
 
-    def run_main(self, outputs, reply="class S { /* fixed */ }", max_attempts="5", tamper=False):
+    def run_main(self, outputs, reply="class S { /* fixed */ }", max_attempts="5", tamper=False,
+                 baseline=False, test_counts=None, pom_tamper=False):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         app = FakeApp(tmp.name, outputs)
         app.tamper = tamper
+        app.pom_tamper = pom_tamper
+        app.test_counts = list(test_counts or [])
         saved = (migrate.run, migrate.ask_model, migrate.check_java)
         migrate.run = app.fake_run
         migrate.ask_model = lambda prompt: (app.prompts.append(prompt), f"```java\n{reply}\n```")[1]
@@ -305,7 +356,7 @@ class AgentLoop(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx, contextlib.redirect_stdout(io.StringIO()):
             migrate.main([str(app.src), "--no-openrewrite", "--skip-security-check", "--work", str(work),
                           "--report", str(report), "--log-dir", str(Path(tmp.name) / "runs"),
-                          "--max-attempts", max_attempts])
+                          "--max-attempts", max_attempts] + ([] if baseline else ["--skip-baseline-check"]))
         return app, work, report, ctx.exception.code
 
     def test_fixes_and_passes(self):
@@ -356,8 +407,9 @@ class AgentLoop(unittest.TestCase):
         migrate.ask_model = down
         report = Path(tmp.name) / "REPORT.md"
         with self.assertRaises(SystemExit) as ctx, contextlib.redirect_stdout(io.StringIO()):
-            migrate.main([str(app.src), "--no-openrewrite", "--skip-security-check", "--work", str(Path(tmp.name) / "w"),
-                          "--report", str(report), "--log-dir", str(Path(tmp.name) / "runs")])
+            migrate.main([str(app.src), "--no-openrewrite", "--skip-security-check", "--skip-baseline-check",
+                          "--work", str(Path(tmp.name) / "w"), "--report", str(report),
+                          "--log-dir", str(Path(tmp.name) / "runs")])
         self.assertEqual(ctx.exception.code, 1)
         self.assertIn("ollama is not running", report.read_text())
         self.assertIn('"model_error"', report.with_suffix(".json").read_text())
@@ -366,6 +418,31 @@ class AgentLoop(unittest.TestCase):
         app, work, report, code = self.run_main(["OK"], tamper=True)
         self.assertEqual(code, 2)
         self.assertIn("INVALID", report.read_text())
+
+    def test_baseline_count_must_match_the_final_run(self):
+        app, work, report, code = self.run_main(["OK", self.COMPILE_1, "OK"], baseline=True, test_counts=[3, 3])
+        self.assertEqual(code, 0)
+        self.assertIn("original app ran 3 tests", report.read_text())
+
+    def test_running_fewer_tests_than_the_baseline_invalidates_the_run(self):
+        app, work, report, code = self.run_main(["OK", self.COMPILE_1, "OK"], baseline=True, test_counts=[3, 1])
+        self.assertEqual(code, 2)
+        text = report.read_text()
+        self.assertIn("INVALID", text)
+        self.assertIn("differ from the Boot 2 baseline", text)
+
+    def test_a_red_original_app_stops_before_anything_else(self):
+        app, work, report, code = self.run_main([self.COMPILE_1], baseline=True)
+        self.assertIn("does not pass its own tests", str(code))  # sys.exit(message)
+        self.assertEqual(app.prompts, [])  # nothing was attempted
+
+    def test_editing_the_pom_to_skip_tests_invalidates_the_run(self):
+        app, work, report, code = self.run_main(["OK", self.COMPILE_1, "OK"], baseline=True, test_counts=[1, 1],
+                                                pom_tamper=True)
+        self.assertEqual(code, 2)
+        text = report.read_text()
+        self.assertIn("build file changed", text)
+        self.assertIn("test-skipping settings: skipTests", text)
 
     def test_original_app_is_never_modified(self):
         app, work, report, code = self.run_main([self.COMPILE_1, "OK"])
@@ -383,6 +460,26 @@ class SecurityDiff(unittest.TestCase):
         rows, diffs = securitydiff.compare(before, after)
         self.assertEqual(len(rows), 2)
         self.assertEqual(diffs, [(("GET", "/a", "anonymous"), 401, 403)])
+
+    def test_not_found_is_not_denied(self):
+        self.assertEqual(securitydiff.category(404), "not found")
+        self.assertEqual(securitydiff.category(401), "denied")
+        self.assertEqual(securitydiff.category(403), "denied")
+        self.assertEqual(securitydiff.category(405), "rejected")
+        self.assertEqual(securitydiff.describe(200, 404)[0], "behaviour")
+        self.assertIn("route no longer matches", securitydiff.describe(200, 404)[1])
+        self.assertIn("access removed", securitydiff.describe(200, 403)[1])
+
+    def test_something_becoming_accessible_is_an_exposure(self):
+        for before in (401, 403, 404):
+            self.assertEqual(securitydiff.describe(before, 200)[0], "exposure")
+        self.assertIn("NEWLY ACCESSIBLE", securitydiff.describe(401, 200)[1])
+
+    def test_exposures_are_listed_first(self):
+        diffs = [(("GET", "/a", "u"), 200, 404), (("GET", "/b", "u"), 401, 200)]
+        lines = securitydiff.format_differences(diffs).splitlines()
+        self.assertIn("/b", lines[2])
+        self.assertIn("/a", lines[3])
 
     def test_table_marks_changed_cells(self):
         rows, _ = securitydiff.compare({("GET", "/a", "anonymous"): 401}, {("GET", "/a", "anonymous"): 404})
@@ -423,8 +520,33 @@ class BenchmarkTable(unittest.TestCase):
             {"app": "a", "model": None, "ok": False, "tests": None, "model_rounds": 0, "seconds": 13},
         ]
         text = bench.table(runs)
-        self.assertIn("| `a` | m | 1/2 | 11/11, 9/11 | 1, 5 | 130 s | 0/18, - |", text)
+        self.assertIn("| `a` | m | 1/2 | 11/11, 9/11 | 1, 5 | 130 s | 0/18, - | unknown |", text)
         self.assertIn("none (upgrade tool only) | 0/1 | -", text)
+
+
+class BenchmarkDetails(unittest.TestCase):
+    SHOW = """  Model
+    architecture        qwen2
+    parameters          7.6B
+    context length      32768
+    embedding length    3584
+    quantization        Q4_K_M
+
+  Capabilities
+    completion
+"""
+
+    def test_parses_ollama_show(self):
+        self.assertEqual(bench.parse_ollama_show(self.SHOW),
+                         {"architecture": "qwen2", "parameters": "7.6B", "context length": "32768", "quantization": "Q4_K_M"})
+
+    def test_same_fingerprint_means_the_runs_are_one_result(self):
+        same = [{"output_hash": "abc"}, {"output_hash": "abc"}, {"output_hash": "abc"}]
+        self.assertEqual(bench.determinism(same), "yes, all 3 runs")
+        mixed = [{"output_hash": "a"}, {"output_hash": "b"}, {"output_hash": "a"}]
+        self.assertEqual(bench.determinism(mixed), "no, 2 different outputs in 3 runs")
+        self.assertEqual(bench.determinism([{"output_hash": "a"}]), "n/a (1 run)")
+        self.assertEqual(bench.determinism([{}, {}]), "unknown")
 
 
 class BenchmarkOrder(unittest.TestCase):

@@ -57,6 +57,50 @@ def compare(before, after):
     return rows, [r for r in rows if r[1] != r[2]]
 
 
+def category(status):
+    """What a status code means for access: allowed, denied, not found, rejected, server error or unreachable."""
+    if status == "ERR" or status is None:
+        return "unreachable"
+    code = int(status)
+    if 200 <= code < 400:
+        return "allowed"
+    if code in (401, 403):
+        return "denied"
+    if code in (404, 410):
+        return "not found"
+    if 400 <= code < 500:
+        return "rejected"  # reached the app, request refused (400, 405, 415 ...)
+    return "server error"
+
+
+MEANING = {
+    ("allowed", "denied"): "access removed (clients that worked now get refused)",
+    ("allowed", "not found"): "the route no longer matches; not an access-control change, but clients will break",
+    ("allowed", "rejected"): "the request is now refused by the app",
+    ("allowed", "server error"): "now fails with a server error",
+}
+
+
+def describe(before, after):
+    """(kind, text): kind is 'exposure' when something became accessible, else 'behaviour'."""
+    b, a = category(before), category(after)
+    if a == "allowed" and b != "allowed":
+        return "exposure", f"NEWLY ACCESSIBLE ({b} -> allowed): possible exposure, review first"
+    if b == a:
+        return "behaviour", f"still {b}, different status"
+    return "behaviour", MEANING.get((b, a), f"{b} -> {a}")
+
+
+def format_differences(diffs):
+    """Markdown table of the changed answers, possible exposures first, saying what each change means."""
+    rows = []
+    for (method, path, role), before, after in diffs:
+        kind, text = describe(before, after)
+        rows.append((kind != "exposure", f"| `{method} {path}` | {role} | {before} | {after} | {text} |"))
+    rows.sort(key=lambda r: r[0])
+    return "\n".join(["| Request | Role | Before | After | What it means |", "|---|---|---|---|---|"] + [r[1] for r in rows])
+
+
 def format_table(rows, roles):
     """Markdown table: one line per endpoint, one cell per role ('before -> after', marked if changed)."""
     by_endpoint = {}

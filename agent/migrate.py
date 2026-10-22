@@ -147,17 +147,49 @@ def tests_summary(out):
 
 
 def count_tests(work):
-    """(total, passed) from Maven's surefire XML reports in the work dir, or None."""
+    """(total, passed) from Maven's surefire XML reports in the work dir, or None. Skipped tests are not passed."""
     total = bad = 0
     for f in (work / "target" / "surefire-reports").glob("TEST-*.xml"):
         head = f.read_text()[:2000]
-        t = re.search(r'<testsuite [^>]*\btests="(\d+)"', head)
-        fl = re.search(r'<testsuite [^>]*\bfailures="(\d+)"', head)
-        er = re.search(r'<testsuite [^>]*\berrors="(\d+)"', head)
-        if t:
-            total += int(t.group(1))
-            bad += int(fl.group(1)) + int(er.group(1)) if fl and er else 0
+        attrs = {k: re.search(rf'<testsuite [^>]*\b{k}="(\d+)"', head) for k in ("tests", "failures", "errors", "skipped")}
+        if attrs["tests"]:
+            total += int(attrs["tests"].group(1))
+            bad += sum(int(m.group(1)) for k, m in attrs.items() if k != "tests" and m)
     return (total, total - bad) if total else None
+
+
+def build(work):
+    """One `mvn test`. Old surefire reports are removed first so the counts always describe this build."""
+    shutil.rmtree(work / "target" / "surefire-reports", ignore_errors=True)
+    return run([MVN, "-q", "-B", TEST_TIMEOUT, "test"], work)
+
+
+def hash_build_files(work):
+    """Hashes of every pom.xml and everything under .mvn: the files that decide which tests run."""
+    files = [f for f in work.rglob("pom.xml") if "target" not in f.parts]
+    files += [f for f in (work / ".mvn").rglob("*") if f.is_file()] if (work / ".mvn").exists() else []
+    return {str(f.relative_to(work)): hashlib.sha256(f.read_bytes()).hexdigest() for f in sorted(files)}
+
+
+SKIP_MARKERS = {
+    "skipTests": r"<skipTests>\s*true", "maven.test.skip": r"maven\.test\.skip", "-DskipTests": r"-DskipTests",
+    "testFailureIgnore": r"<testFailureIgnore>\s*true", "surefire <skip>": r"<skip>\s*true\s*</skip>",
+    "surefire excludes": r"<excludes?>\s*<exclude>[^<]*[Tt]est",
+}
+
+
+def test_skipping_markers(pom_text):
+    """Settings in a pom that make Maven skip, ignore failures in, or exclude tests."""
+    return sorted(name for name, pattern in SKIP_MARKERS.items() if re.search(pattern, pom_text))
+
+
+def output_hash(work):
+    """One hash over all application sources, to tell whether repeated runs produced identical code."""
+    h = hashlib.sha256()
+    for f in sorted((work / "src" / "main").rglob("*")):
+        if f.is_file():
+            h.update(str(f.relative_to(work)).encode() + f.read_bytes())
+    return h.hexdigest()[:12]
 
 
 def snapshot(work):
@@ -173,12 +205,12 @@ def restore(work, snap):
 
 def ask_model(prompt):
     if OPENAI_BASE:
-        url, body = f"{OPENAI_BASE}/chat/completions", {"model": MODEL, "temperature": 0,
+        url, body = f"{OPENAI_BASE}/chat/completions", {"model": MODEL, "temperature": 0, "seed": 0,
               "messages": [{"role": "user", "content": prompt}]}
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {os.environ.get('API_KEY', '')}"}
     else:
         url, body = f"{OLLAMA}/api/chat", {"model": MODEL, "stream": False,
-              "options": {"temperature": 0, "num_ctx": 8192},
+              "options": {"temperature": 0, "seed": 0, "num_ctx": 8192},
               "messages": [{"role": "user", "content": prompt}]}
         headers = {"Content-Type": "application/json"}
     req = urllib.request.Request(url, json.dumps(body).encode(), headers)
@@ -362,6 +394,9 @@ def parse_args(argv=None):
     ap.add_argument("--max-attempts", type=int, default=MAX_ATTEMPTS, help="model fix rounds; 0 = upgrade tool only")
     ap.add_argument("--no-openrewrite", action="store_true", help="use the built-in fallback upgrade")
     ap.add_argument("--skip-security-check", action="store_true")
+    ap.add_argument("--skip-baseline-check", action="store_true",
+                    help="do not first run the original app's tests (needed to verify the executed-test count)")
+    ap.add_argument("--endpoints", help="endpoints.json for the security check (default: <app>/endpoints.json)")
     ap.add_argument("--cve-scan", action="store_true", help="count known advisories via osv.dev (sends dependency coordinates)")
     ap.add_argument("--work", help="where the upgraded copy goes (default: ./migrated-<app>)")
     ap.add_argument("--report", help="report path (default: ./REPORT.md)")
@@ -392,6 +427,16 @@ def main(argv=None):
     cheatsheet = load_cheatsheet()
 
     fresh_copy(src, work)
+    baseline_count = None
+    if not args.skip_baseline_check:
+        print("[0/4] baseline: the original app must pass its own tests")
+        code, out = build(work)
+        baseline_count = count_tests(work)
+        if code != 0 or not baseline_count:
+            sys.exit("error: the original app does not pass its own tests (or runs none), so an upgrade cannot be "
+                     "checked against it.\n" + trim(out, 1500))
+        shutil.rmtree(work / "target", ignore_errors=True)
+    original_markers = test_skipping_markers((src / "pom.xml").read_text()) if (src / "pom.xml").exists() else []
     originals = {f: f.read_text() for f in work.rglob("*.java")}
     tests_before_upgrade = hash_tests(work)
 
@@ -409,6 +454,7 @@ def main(argv=None):
         mechanical_upgrade(work)
     target = boot_version(work)
     tests_baseline = hash_tests(work)
+    build_baseline = hash_build_files(work)
     touched_by_tool = changed_tests(tests_before_upgrade, tests_baseline)
 
     rounds, rejected, edited = [], {}, []
@@ -419,7 +465,7 @@ def main(argv=None):
     while True:
         iterations += 1
         print(f"[2/4] build + test (run {iterations})")
-        code, out = run([MVN, "-q", "-B", TEST_TIMEOUT, "test"], work)
+        code, out = build(work)
         score = parse_score(code, out)
         action = "build"
         if best is None or score < best[0]:
@@ -482,10 +528,18 @@ def main(argv=None):
         restore(work, best[1])
         out = best[2]
     violations = changed_tests(tests_baseline, hash_tests(work))
+    violations += [f"{p} (build file changed after the upgrade tool)" for p in changed_tests(build_baseline, hash_build_files(work))]
+    pom_now = work / "pom.xml"
+    new_markers = sorted(set(test_skipping_markers(pom_now.read_text()) if pom_now.exists() else []) - set(original_markers))
+    if new_markers:
+        violations.append("pom.xml now contains test-skipping settings: " + ", ".join(new_markers))
+    final_count = count_tests(work) if ok else None
+    if ok and baseline_count and final_count != baseline_count:
+        violations.append(f"executed tests {final_count} differ from the Boot 2 baseline {baseline_count} (total, passed)")
     ok = ok and not violations
 
     sec_rows = sec_diffs = sec_roles = sec_error = None
-    spec = src / "endpoints.json"
+    spec = Path(args.endpoints) if args.endpoints else src / "endpoints.json"
     if not args.skip_security_check and spec.exists() and best[0] < 1000:
         print("[3/4] security equivalence check (Boot 2 vs upgraded)")
         try:
@@ -509,7 +563,8 @@ def main(argv=None):
                 f"Last build error:\n{trim(best[2])}\n\nIn at most 5 sentences, tell a developer what is most likely wrong "
                 "and what to check first. Do not invent code.")
         else:
-            changed = "\n".join(f"{m} {p} as {r}: {b} -> {a}" for (m, p, r), b, a in sec_diffs)
+            changed = "\n".join(f"{m} {p} as {r}: {b} -> {a} ({securitydiff.describe(b, a)[1]})"
+                                for (m, p, r), b, a in sec_diffs)
             diagnosis = diagnose(
                 "After upgrading a Spring Boot 2.7 app to Spring Boot 3 all tests pass, but these requests now get "
                 f"different HTTP status codes:\n{changed}\n\nMigration notes:\n{cheatsheet}\n"
@@ -517,7 +572,9 @@ def main(argv=None):
 
     write_report(report_path, locals())
     summary = {"app": src.name, "model": None if MAX_ATTEMPTS == 0 else MODEL, "tool": tool, "boot": target,
-               "ok": ok, "score": best[0], "tests": (count_tests(work) if ok else tests_summary(best[2])),
+               "ok": ok, "score": best[0], "tests": (final_count if ok else tests_summary(best[2])),
+               "baseline_tests": baseline_count, "output_hash": output_hash(work),
+               "newly_accessible": None if sec_diffs is None else sum(securitydiff.describe(b, a)[0] == "exposure" for _, b, a in sec_diffs),
                "model_rounds": model_rounds, "runs": iterations, "model_error": model_error,
                "security_checks": None if sec_rows is None else len(sec_rows),
                "security_diffs": None if sec_diffs is None else len(sec_diffs),
@@ -532,42 +589,58 @@ def write_report(path, v):
     ok, rounds, work, src = v["ok"], v["rounds"], v["work"], v["src"]
     verdict = ("tests PASS" if ok else "NEEDS HUMAN REVIEW (tests failing)")
     if v["violations"]:
-        verdict = "INVALID: test files were modified"
+        verdict = "INVALID: the test setup was changed or the tests that ran differ from the baseline"
     r = ["# Migration report", "",
          f"- App: `{src.name}`  |  Model: {'none (upgrade tool only)' if MAX_ATTEMPTS == 0 else '`' + MODEL + '`'}  |  Upgrade tool: {v['tool']}",
          f"- Spring Boot parent after upgrade: `{v['target']}`",
          f"- Result: **{verdict}**",
-         f"- Model fix rounds: {v['model_rounds']} (max {MAX_ATTEMPTS})", ""]
+         f"- Model fix rounds: {v['model_rounds']} (max {MAX_ATTEMPTS})",
+         f"- Settings: temperature 0, seed 0, 8192-token context; output fingerprint `{output_hash(work)}` "
+         "(identical fingerprints across runs mean identical generated code)", ""]
     r += ["## Build score per run", "", "Score = failing tests, or 1000+ compile errors. 0 means green. "
           "A run that scores worse than the best so far is rolled back.", "",
           "| Run | Score | Tests passed | What happened |", "|---|---|---|---|"]
     for x in rounds:
         passed = f"{x['summary'][1]}/{x['summary'][0]}" if x["summary"] else ("all" if x["score"] == 0 else "-")
         r.append(f"| {x['run']} | {x['score']} | {passed} | {x['action']} |")
+    base = v["baseline_count"]
     r += ["", "## Test integrity", "",
-          "Existing test files are never written by the agent; their hashes are checked after the upgrade tool runs "
-          "and again at the end. " + ("**Violation: " + ", ".join(v["violations"]) + "**"
-                                      if v["violations"] else "Result: unchanged.")]
+          "- Existing files under `src/test` (tests and test resources) and every `pom.xml` / `.mvn` file are hashed after the "
+          "upgrade tool runs and again at the end. The fix loop can only write under `src/main`.",
+          "- The upgraded pom must not gain test-skipping settings (`skipTests`, `maven.test.skip`, `testFailureIgnore`, "
+          "surefire `skip` or excludes).",
+          (f"- A passing run must execute exactly the baseline's tests: the original app ran {base[0]} tests, {base[1]} passed."
+           if base else "- Baseline check skipped, so the executed-test count was not verified."),
+          ("- **Violation: " + "; ".join(v["violations"]) + "**") if v["violations"] else "- Result: no violations."]
     if v["touched_by_tool"]:
         r += ["", "The upgrade tool itself (not the model) rewrote these test files: "
               + ", ".join(f"`{p}`" for p in v["touched_by_tool"])]
     if v["sec_rows"] is not None:
         d = v["sec_diffs"]
+        exposed = sum(securitydiff.describe(b, a)[0] == "exposure" for _, b, a in d)
         r += ["", "## Security equivalence (same requests, Boot 2 build vs upgraded build)", "",
-              f"{len(v['sec_rows'])} checks, **{len(d)} difference(s)**. Cells show the HTTP status; changed cells show before → after.",
+              f"{len(v['sec_rows'])} checks, **{len(d)} difference(s)**, of which **{exposed} newly accessible**. "
+              "Cells show the HTTP status; changed cells show before → after. "
+              "401/403 means denied; 404 means the route was not found, which is a different problem.",
               "", securitydiff.format_table(v["sec_rows"], v["sec_roles"])]
         if d:
-            r += ["", "**Flagged for a human: the upgraded app answers some requests differently. "
-                  "Review each before deploying.**"]
+            r += ["", "### What changed", "", securitydiff.format_differences(d), "",
+                  "**Flagged for a human: the upgraded app answers some requests differently. "
+                  "Review each before deploying" + (", starting with the newly accessible ones.**" if exposed else ".**")]
     elif v["sec_error"]:
         r += ["", "## Security equivalence", "", "Could not run:", "```", v["sec_error"], "```"]
     cve = v["cve"]
     if isinstance(cve, tuple):
         before, after = cve
-        r += ["", "## Known advisories (osv.dev, exact dependency versions)", "",
+        r += ["", "## Known advisories (osv.dev; not confirmed CVEs)", "",
               f"- Before: {len(before['advisories'])} advisories across {before['dependencies']} dependencies",
               f"- After: {len(after['advisories'])} advisories across {after['dependencies']} dependencies",
-              "- Counts are known advisories for those versions, not proof of exploitability."]
+              "- These are advisories published for the exact dependency versions, not proof that your app is exploitable.",
+              "- The agent does **not** bump dependencies itself. The drop comes only from the versions Spring Boot 3 manages, "
+              "so the advisories below are still unpatched and need a human decision.", "",
+              "<details><summary>Advisories that remain after the upgrade</summary>", ""]
+        r += [f"- `{dep}`: {', '.join(ids)}" for dep, ids in sorted(after["affected"].items())] or ["- none"]
+        r += ["", "</details>"]
     elif isinstance(cve, str):
         r += ["", "## Known advisories", "", f"Scan unavailable: {cve}"]
     changes = []
