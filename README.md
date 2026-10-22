@@ -58,43 +58,37 @@ The model sees only the failing file, its original version, the errors for that 
 
 ## Results
 
-Measured on an 18 GB Apple Silicon laptop with everything local (Ollama). Three runs per model per app (DeepSeek was stopped early, see below); the full table, hardware and per-run reports are in [BENCHMARK.md](BENCHMARK.md) and [`reports/benchmark/`](reports/benchmark).
+Measured on an Apple M3 Pro with 18 GB RAM, everything local (Ollama 0.40.3, Qwen2.5-Coder 7B at Q4_K_M, temperature 0, seed 0). Full table, model details, agent commit and per-run reports: [BENCHMARK.md](BENCHMARK.md) and [`reports/benchmark/`](reports/benchmark).
 
-| App | Setup | Runs passed | Tests passed | Model rounds | Time per run | Security differences |
-|---|---|---|---|---|---|---|
-| `sample-app` (11 tests) | OpenRewrite alone | 0/1 | does not compile | 0 | 11 s | n/a |
-| `sample-app` | **Qwen2.5-Coder 7B + agent** | **3/3** | 11/11 each run | 2 | 62–65 s | 0 of 18 checks |
-| `sample-app` | DeepSeek-Coder 6.7B + agent | 0/2 | 8/11, 8/11 | 5 | 260 s and 863 s | 10 of 18 checks, both runs |
-| `sample-jpa-app` (8 tests) | OpenRewrite alone | 0/1 | does not compile | 0 | 11 s | n/a |
-| `sample-jpa-app` | **Qwen2.5-Coder 7B + agent** | **3/3** | 8/8 each run | 1 | 65–67 s | 2 of 24 checks, the same 2 every run |
-| `sample-jpa-app` | DeepSeek-Coder 6.7B + agent | 0/1 | 3/8 | 5 | 223 s | 16 of 24 checks |
+**This benchmark is incomplete and partly negative. Please read it as it is.** Earlier numbers in this repository were wrong: a bug made the agent silently use its weak built-in fallback instead of OpenRewrite (OpenRewrite skips folders that a `.gitignore` ignores). That is fixed, those numbers were removed, and the rows below are the corrected ones. DeepSeek-Coder has not been rerun with the corrected setup, so it has no result here.
+
+| App | Setup | Runs passed | Tests passed | Time per run | Security answers that changed |
+|---|---|---|---|---|---|
+| `sample-app` (11 tests) | OpenRewrite alone | 0/1 | does not compile | 12 s | n/a |
+| `sample-app` | **OpenRewrite + agent (Qwen2.5-Coder 7B)** | **3/3** | 11/11 each run | 46 s | 0 of 18 |
+| `sample-jpa-app` (8 tests) | OpenRewrite alone | 0/1 | does not compile | 21 s | n/a |
+| `sample-jpa-app` | OpenRewrite + agent (Qwen2.5-Coder 7B) | **0/3** | none ran | about 151 s | n/a |
 
 What this shows:
 
-- **OpenRewrite alone is not enough.** It converts the `javax` imports and most of the security chain, but it cannot rewrite `WebSecurityConfigurerAdapter` (it leaves a "migrate manually" marker) or Hibernate 6's removed `@Type(type=...)`. Neither sample app compiles afterwards, so no tests run.
-- **With the agent, Qwen2.5-Coder 7B finishes both upgrades** in about a minute, passing every test, in all six runs. It rewrites the security config into a `SecurityFilterChain` bean (plus the user store and `AuthenticationManager` bean in `sample-app`) and replaces the `@Type` mapping in `sample-jpa-app`.
-- **Green tests are not the whole story.** On `sample-jpa-app` all 8 tests pass, yet `GET /products/` (with a trailing slash) goes from **200 to 404** for logged-in users, because Spring 6 stopped matching trailing slashes. No test covers it. The security equivalence check finds it every time and the report flags it for a human instead of reporting a clean pass.
+- **OpenRewrite alone is not enough.** It converts the security rules but cannot rewrite `WebSecurityConfigurerAdapter` (it leaves a "migrate manually" marker), and on the JPA app it rewrote Hibernate's `@Type(type = "text")` into `@Type(text.class)`, which does not compile. Neither app builds afterwards.
+- **`sample-app`: the agent finishes the job.** Qwen passes all 11 tests in about 46 seconds, with one model round, and the generated code is byte-identical in all three runs, so treat it as one result seen three times, not three independent samples. All 18 security checks answer the same as the Boot 2.7 build.
+- **`sample-jpa-app`: it does not.** Qwen fails every run, and the final code equals OpenRewrite's own output: each model attempt scored worse than the starting point and was rolled back. The cause is a gap in the agent, not only the model. The model's `Product.java` rewrite was right but used `@Column` without importing it; the agent's import repair did not know that class, so the attempt counted as swapping one compile error for another and was reverted. Adding common JPA classes to the import repair, and repairing imports before judging an attempt, is the obvious next fix and is not done.
+- **Green tests are not the whole story.** In earlier passing runs of the JPA app (one hand-run with OpenRewrite, and later benchmark runs that turned out to have used the fallback), all 8 tests were green while `GET /products/` changed from **200 to 404** (Spring 6 stopped matching trailing slashes). The security check reports that as "route no longer matches", separately from access being removed, and puts anything newly accessible first. Note that the one early hand-run with real OpenRewrite did pass this app, so the failures above are sensitive to harness changes made since; I have not isolated which one.
 
-| Endpoint (`sample-jpa-app`) | anonymous | clerk | manager |
-|---|---|---|---|
-| `GET /products` | 401 | 200 | 200 |
-| `GET /products/` | 401 | **200 → 404** | **200 → 404** |
-
-**DeepSeek-Coder 6.7B did not finish either app, and its benchmark was stopped early on purpose.** After two runs on `sample-app` (both 8/11) and one on `sample-jpa-app` (3/8) it was clearly not converging, and each run takes 4 to 14 minutes, so the remaining runs were skipped. The three finished runs are reported above as they came out. Its upgraded apps answer 10 of 18 and 16 of 24 requests differently from the Boot 2.7 build (requests that used to give 200 or 401 now give 403), so the security check confirms what the failing tests show.
-
-Do not read this as "DeepSeek cannot do it". There are two causes. The model rewrites the security config with `httpBasic(AbstractHttpConfigurer::disable)`, which turns HTTP Basic off. And there is a **known weakness in the agent that is not fixed**: when the build compiles but tests fail, it picks the files to fix from the stack trace. DeepSeek's later rounds went to `ApiController`, `DemoApplication`, `Order` and `ShopApplication`, which were not the problem, and it never got another chance at `SecurityConfig`. Fixing that file choice is the first thing to try, and the Qwen numbers would need rerunning with it.
-
-How to read these results fairly:
-
-- The harness was tuned after watching models fail on these two apps. An earlier benchmark run had Qwen fail `sample-jpa-app` after writing one class into another file's source. That led to per-file error messages and the check that rejects a reply for the wrong file. The numbers above are after those changes, so they measure the harness plus the model, and the cheat sheet entries target exactly these apps.
-- Three runs per cell is a small sample, and models are not perfectly repeatable even at temperature 0.
-- Two small apps are not your codebase. Treat this as evidence that the approach works, not as a guarantee.
+Fairness notes: the cheat sheet and import table were extended after watching models fail on these two apps, so passes measure the harness plus those hints. Three runs per cell is a small sample, and where the code is identical across runs it is really one sample. Two small apps are not your codebase.
 
 ## Held-out test
 
 Both sample apps and the cheat sheet were written by us, so they could be tuned to each other. To check, the benchmark also includes an app we did not write: the Spring team's own [spring-petclinic](https://github.com/spring-projects/spring-petclinic) at commit `a5cbb85` (Spring Boot 2.7.3, Apache-2.0), pinned and fetched on demand instead of copied into this repo. The cheat sheet was frozen before its first run, and the results are reported as they came out. Details and rules: [`agent/heldout/README.md`](agent/heldout/README.md). Petclinic has no Spring Security, so it tests the upgrade and Hibernate/JPA side, not access control.
 
-HELDOUT_RESULTS_PLACEHOLDER
+**Result on Petclinic: it fails, and the failure is informative.**
+
+1. OpenRewrite itself crashed. Petclinic has both a `pom.xml` and a `build.gradle`, and the plugin tried to download a Gradle distribution to parse the Gradle build and failed after about three minutes. The report flags this: *the built-in fallback was used, not OpenRewrite*.
+2. The weak fallback bumps the Boot version and `javax` imports but does not know that `mysql:mysql-connector-java` was renamed in Boot 3, so the upgraded `pom.xml` does not even load.
+3. The agent only edits Java files, by design, so it cannot fix a `pom.xml`. The model was still asked to "fix" three unrelated entity classes for five rounds and changed nothing. Its model-written diagnosis was right though: the `mysql-connector-java` version is missing in `pom.xml` at line 70.
+
+This was one Qwen run (two more were planned and not done). Following the rules in `agent/heldout/README.md`, the cheat sheet was frozen before this run and the result is reported as it came out. Fixing the causes (ignore Gradle files for OpenRewrite in a Maven build, stop spending model rounds on build-file errors, handle renamed dependencies) would be a change made after seeing this app, so any later Petclinic result must be labelled as no longer held-out.
 
 ## Safety
 
@@ -113,7 +107,7 @@ HELDOUT_RESULTS_PLACEHOLDER
 | DeepSeek-Coder 6.7B (`deepseek-coder:6.7b`) | Ollama | [DeepSeek License Agreement v1.0](https://github.com/deepseek-ai/deepseek-coder/blob/main/LICENSE-MODEL) (open-weight, not open source) | [Hugging Face](https://huggingface.co/deepseek-ai/deepseek-coder-6.7b-instruct) |
 
 - **Qwen2.5-Coder** is under the standard Apache 2.0 licence: commercial use and redistribution are allowed with the usual notices.
-- **DeepSeek-Coder** is open-weight under a custom licence. Commercial use is allowed, but the licence has use restrictions (for example no military use and no harmful or fully automated decisions) that must be passed on to anyone you redistribute the model or derivatives to. It is governed by PRC law.
+- **DeepSeek-Coder** (not in the corrected benchmark yet) is open-weight under a custom licence. Commercial use is allowed, but the licence has use restrictions (for example no military use and no harmful or fully automated decisions) that must be passed on to anyone you redistribute the model or derivatives to. It is governed by PRC law.
 - Licence details were read from the model cards on 22 Oct 2026 (card pages and licence texts); re-check them before redistributing weights. The cards describe the Hugging Face Instruct models; we run the Ollama tags above and have not checked that they are byte-identical to those releases.
 
 The model is a setting (`--model` or `MODEL=...`), and any OpenAI-compatible endpoint can be used instead with `OPENAI_BASE_URL`.
@@ -128,7 +122,10 @@ ollama pull qwen2.5-coder:7b-instruct
 # baseline: the Spring Boot 2.7 sample app passes its own tests
 (cd sample-app && mvn test)
 
-# upgrade it (copies to migrated-sample-app/, writes REPORT.md)
+# OpenRewrite alone vs OpenRewrite + the agent, side by side, in the terminal
+python3 agent/compare.py sample-app
+
+# upgrade it (the upgraded copy goes to a temp folder outside the repo, printed at the end; the report is REPORT.md)
 python3 agent/migrate.py sample-app
 
 # the second sample app (JPA, Hibernate, Actuator)
@@ -173,12 +170,14 @@ python3 agent/migrate.py heldout/spring-petclinic --endpoints agent/heldout/spri
 
 ## Limitations
 
-- Two small sample apps. Results on your codebase will differ.
-- The model sizes tested are 6–7B. They handle the common Spring Security rewrite and Hibernate 6 `@Type` change, but results vary between runs and a failed run is expected, which is why every failure is reported and flagged.
-- When tests fail at runtime the agent can pick the wrong file to fix (see Results). This hurt the weaker model in every one of its runs.
-- The cheat sheet and import table were extended after watching models fail on these sample apps, so the pass rates measure the harness plus those hints, not unaided models.
+- Two small sample apps of our own plus one held-out app that the agent currently fails. Results on your codebase will differ.
+- **OpenRewrite caveats we hit:** it cannot rewrite `WebSecurityConfigurerAdapter`; it can emit code that does not compile (`@Type(text.class)`); it silently does nothing in a folder that `.gitignore` ignores (the agent now warns and works outside the repo); it crashes on projects that have both Maven and Gradle files; it needs the project to compile before it starts; and it does not check behaviour.
+- The agent cannot edit build files. A `pom.xml` problem is flagged for a human, but the loop currently still spends model rounds on unrelated Java files first.
+- A fix that cures one compile error but introduces an easily repaired one (a missing import) is judged worse and rolled back, so the import repair never gets to help. This is why `sample-jpa-app` fails.
+- The 7B model works on the common Spring Security rewrite and not reliably on the rest. A failed run is expected, which is why every failure is reported and flagged.
+- The cheat sheet and import table were extended after watching models fail on our sample apps, so pass rates measure the harness plus those hints, not unaided models.
 - The security check compares HTTP status codes for the endpoints you list; it does not read your security configuration.
-- Maven only; the agent does not patch vulnerable dependencies itself beyond what the Boot 3 upgrade brings.
+- Maven only. The agent does not patch vulnerable dependencies itself beyond what the Boot 3 upgrade brings.
 
 ## Contributing
 
