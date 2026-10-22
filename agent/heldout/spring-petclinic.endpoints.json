@@ -1,0 +1,17 @@
+{
+  "users": {
+    "anonymous": null
+  },
+  "endpoints": [
+    {"method": "GET", "path": "/"},
+    {"method": "GET", "path": "/owners/find"},
+    {"method": "GET", "path": "/owners?lastName=Davis"},
+    {"method": "GET", "path": "/owners/1"},
+    {"method": "GET", "path": "/owners/1/edit"},
+    {"method": "GET", "path": "/owners/1/pets/new"},
+    {"method": "GET", "path": "/vets.html"},
+    {"method": "GET", "path": "/vets"},
+    {"method": "GET", "path": "/actuator/health"},
+    {"method": "GET", "path": "/oups"}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "spring-petclinic": {
+    "repo": "https://github.com/spring-projects/spring-petclinic.git",
+    "commit": "a5cbb8505a1df3c348c06607933a07fc8c87c222",
+    "committed": "2022-10-16",
+    "boot": "2.7.3",
+    "license": "Apache-2.0",
+    "about": "The Spring team's own sample app: JPA, Thymeleaf, caching, Actuator. Last Spring Boot 2.7 commit before the move to Boot 3. Not written by us."
+  }
+}

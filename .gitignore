@@ -13,4 +13,4 @@ migrated-*/
 .venv/
 *.log
 # held-out third-party apps are fetched at a pinned commit, not vendored
-heldout/
+/heldout/
