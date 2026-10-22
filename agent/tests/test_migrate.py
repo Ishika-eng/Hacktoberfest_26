@@ -549,6 +549,14 @@ class BenchmarkDetails(unittest.TestCase):
         self.assertEqual(bench.determinism([{}, {}]), "unknown")
 
 
+class CodeVersion(unittest.TestCase):
+    def test_reports_commit_cheatsheet_commit_and_dirty_flag(self):
+        head, sheet, dirty = bench.code_version()
+        self.assertTrue(head)
+        self.assertTrue(sheet)
+        self.assertIsInstance(dirty, bool)
+
+
 class BenchmarkOrder(unittest.TestCase):
     def test_rows_are_sorted_by_app_then_baseline_then_model_order(self):
         def r(app, model, ok=True):
