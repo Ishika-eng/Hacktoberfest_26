@@ -14,3 +14,6 @@ migrated-*/
 *.log
 # held-out third-party apps are fetched at a pinned commit, not vendored
 /heldout/
+
+# side-by-side demo output
+demo-out/
