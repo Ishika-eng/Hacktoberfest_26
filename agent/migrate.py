@@ -24,6 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
+import buildrules  # noqa: E402
 import cves  # noqa: E402
 import securitydiff  # noqa: E402
 
@@ -537,6 +538,9 @@ def main(argv=None):
     if tool == "built-in fallback":
         print(f"[1/4] built-in upgrade -> Spring Boot {BOOT3}")
         mechanical_upgrade(work)
+    build_rules_applied = buildrules.apply_build_rules(work)  # deterministic pom fixes; part of the upgrade stage
+    if build_rules_applied:
+        print("   build-file rules applied: " + "; ".join(build_rules_applied))
     target = boot_version(work)
     tests_baseline = hash_tests(work)
     build_baseline = hash_build_files(work)
@@ -690,6 +694,8 @@ def write_report(path, v):
          f"- Spring Boot parent after upgrade: `{v['target']}`",
          *([f"- Gradle files ignored in the work copy (the agent is Maven-only): {', '.join(v['dropped_gradle'])}"]
            if v["dropped_gradle"] else []),
+         *(["- Build-file rules applied by the agent (deterministic, not the model; the model can never edit the pom): "
+            + "; ".join(v["build_rules_applied"])] if v["build_rules_applied"] else []),
          *([f"- **Warning: the built-in fallback was used, not OpenRewrite.** {v['fallback_reason']}"]
            if v["tool"] == "built-in fallback" and v["fallback_reason"] and not v["fallback_reason"].startswith("OpenRewrite was disabled") else []),
          f"- Result: **{verdict}**",

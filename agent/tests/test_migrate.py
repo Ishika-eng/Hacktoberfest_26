@@ -24,6 +24,7 @@ migrate = load("migrate")
 securitydiff = load("securitydiff")
 bench = load("bench")
 compare = load("compare")
+buildrules = load("buildrules")
 cves = load("cves")
 
 
@@ -157,6 +158,46 @@ class SettingsDoNotLeakBetweenRuns(unittest.TestCase):
         args = migrate.parse_args(["x"])
         self.assertEqual(args.max_attempts, migrate.DEFAULT_MAX_ATTEMPTS)
         self.assertEqual(args.model, migrate.DEFAULT_MODEL)
+
+
+class BuildFileRules(unittest.TestCase):
+    POM = ("<properties><openapi-generator-maven-plugin.version>6.0.1</openapi-generator-maven-plugin.version></properties>"
+           "<plugin><artifactId>openapi-generator-maven-plugin</artifactId><configuration>"
+           "<generatorName>spring</generatorName><configOptions><interfaceOnly>true</interfaceOnly></configOptions>"
+           "</configuration></plugin>")
+
+    def test_old_spring_generator_is_upgraded_and_switched_to_jakarta(self):
+        text, changes = buildrules.openapi_generator_jakarta(self.POM)
+        self.assertIn(f"<openapi-generator-maven-plugin.version>{buildrules.OPENAPI_GENERATOR_VERSION}<", text)
+        self.assertIn("<useSpringBoot3>true</useSpringBoot3>", text)
+        self.assertEqual(len(changes), 2)
+
+    def test_it_is_idempotent(self):
+        once, _ = buildrules.openapi_generator_jakarta(self.POM)
+        twice, changes = buildrules.openapi_generator_jakarta(once)
+        self.assertEqual(once, twice)
+        self.assertEqual(changes, [])
+
+    def test_a_newer_generator_version_is_not_downgraded(self):
+        newer = self.POM.replace("6.0.1", "7.2.0")
+        text, changes = buildrules.openapi_generator_jakarta(newer)
+        self.assertIn(">7.2.0<", text)
+        self.assertEqual(len(changes), 1)  # only the option is added
+
+    def test_projects_without_the_generator_are_untouched(self):
+        pom = "<project><artifactId>demo</artifactId></project>"
+        self.assertEqual(buildrules.openapi_generator_jakarta(pom), (pom, []))
+
+    def test_other_generators_are_untouched(self):
+        pom = self.POM.replace("<generatorName>spring</generatorName>", "<generatorName>java</generatorName>")
+        self.assertEqual(buildrules.openapi_generator_jakarta(pom), (pom, []))
+
+    def test_rules_edit_the_work_copy_only_when_something_applies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "pom.xml").write_text(self.POM)
+            self.assertEqual(len(buildrules.apply_build_rules(work)), 2)
+            self.assertEqual(buildrules.apply_build_rules(work), [])
 
 
 class MixedMavenGradle(unittest.TestCase):
