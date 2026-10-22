@@ -1,4 +1,4 @@
-# Round 3: SecurityConfig.java
+# Round 1: SecurityConfig.java
 
 Model: `qwen2.5-coder:7b-instruct`
 
@@ -57,9 +57,18 @@ Custom auto-configuration:
 
 Build error:
 [ERROR] COMPILATION ERROR : 
-[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-jpa-app__qwen2.5-coder-7b-instruct__run2/src/main/java/com/example/shop/SecurityConfig.java:[27,5] method does not override or implement a method from a supertype
-[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.13.0:compile (default-compile) on project shop: Compilation failure: Compilation failure: 
-[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-jpa-app__qwen2.5-coder-7b-instruct__run2/src/main/java/com/example/shop/SecurityConfig.java:[27,5] method does not override or implement a method from a supertype
+[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-app__qwen2.5-coder-7b-instruct__run1/src/main/java/com/example/demo/SecurityConfig.java:[11,72] cannot find symbol
+[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-app__qwen2.5-coder-7b-instruct__run1/src/main/java/com/example/demo/SecurityConfig.java:[17,37] cannot find symbol
+[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-app__qwen2.5-coder-7b-instruct__run1/src/main/java/com/example/demo/SecurityConfig.java:[33,16] cannot find symbol
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.13.0:compile (default-compile) on project demo: Compilation failure: Compilation failure: 
+[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-app__qwen2.5-coder-7b-instruct__run1/src/main/java/com/example/demo/SecurityConfig.java:[11,72] cannot find symbol
+[ERROR]   symbol:   class WebSecurityConfigurerAdapter
+[ERROR]   location: package org.springframework.security.config.annotation.web.configuration
+[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-app__qwen2.5-coder-7b-instruct__run1/src/main/java/com/example/demo/SecurityConfig.java:[17,37] cannot find symbol
+[ERROR]   symbol: class WebSecurityConfigurerAdapter
+[ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-app__qwen2.5-coder-7b-instruct__run1/src/main/java/com/example/demo/SecurityConfig.java:[33,16] cannot find symbol
+[ERROR]   symbol:   variable super
+[ERROR]   location: class com.example.demo.SecurityConfig
 [ERROR] -> [Help 1]
 [ERROR] 
 [ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
@@ -68,76 +77,19 @@ Build error:
 [ERROR] For more information about the errors and possible solutions, please read the following articles:
 [ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
 
-A previous attempt at this file was REJECTED because it made the build worse. Do not repeat it:
-```java
-package com.example.shop;
-
-import static org.springframework.security.config.Customizer.withDefaults;
-
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.http.HttpMethod;
-import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.security.core.userdetails.User;
-import org.springframework.security.core.userdetails.UserDetailsService;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.provisioning.InMemoryUserDetailsManager;
-import org.springframework.security.web.SecurityFilterChain;
-
-@Configuration
-@EnableWebSecurity
-public class SecurityConfig {
-
-    @Bean
-    public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder();
-    }
-
-    @Bean
-    public UserDetailsService userDetailsService(PasswordEncoder encoder) {
-        return new InMemoryUserDetailsManager(
-            User.withUsername("clerk").password(encoder.encode("clerk123")).roles("CLERK").build(),
-            User.withUsername("manager").password(encoder.encode("manager123")).roles("MANAGER").build());
-    }
-
-    @Bean
-    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
-        return config.getAuthenticationManager();
-    }
-
-    @Bean SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-        http.csrf(csrf -> csrf.disable())
-                .authorizeHttpRequests(requests -> requests
-                        .requestMatchers("/actuator/health").permitAll()
-                        .requestMatchers("/whoami").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/products").hasAnyRole("CLERK", "MANAGER")
-                        .requestMatchers(HttpMethod.DELETE, "/products/**").hasRole("MANAGER")
-                        .requestMatchers("/actuator/**").hasRole("MANAGER")
-                        .anyRequest().authenticated())
-                .httpBasic(withDefaults());
-        return http.build();
-    }
-}
-
-```
-
 ORIGINAL Spring Boot 2.7 version of SecurityConfig.java (this is the behaviour to preserve):
 ```java
-package com.example.shop;
+package com.example.demo;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
-import org.springframework.security.core.userdetails.User;
-import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 
 @Configuration
 @EnableWebSecurity
@@ -148,23 +100,26 @@ public class SecurityConfig extends WebSecurityConfigurerAdapter {
         return new BCryptPasswordEncoder();
     }
 
+    @Override
+    protected void configure(AuthenticationManagerBuilder auth) throws Exception {
+        auth.inMemoryAuthentication()
+            .withUser("admin").password(passwordEncoder().encode("admin123")).roles("ADMIN")
+            .and()
+            .withUser("alice").password(passwordEncoder().encode("alice123")).roles("USER");
+    }
+
     @Bean
     @Override
-    public UserDetailsService userDetailsService() {
-        return new InMemoryUserDetailsManager(
-            User.withUsername("clerk").password(passwordEncoder().encode("clerk123")).roles("CLERK").build(),
-            User.withUsername("manager").password(passwordEncoder().encode("manager123")).roles("MANAGER").build());
+    public AuthenticationManager authenticationManagerBean() throws Exception {
+        return super.authenticationManagerBean();
     }
 
     @Override
     protected void configure(HttpSecurity http) throws Exception {
         http.csrf().disable()
             .authorizeRequests()
-                .antMatchers("/actuator/health").permitAll()
-                .antMatchers("/whoami").permitAll()
-                .antMatchers(HttpMethod.POST, "/products").hasAnyRole("CLERK", "MANAGER")
-                .antMatchers(HttpMethod.DELETE, "/products/**").hasRole("MANAGER")
-                .antMatchers("/actuator/**").hasRole("MANAGER")
+                .antMatchers("/public/**").permitAll()
+                .antMatchers("/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated()
             .and()
             .httpBasic();
@@ -175,50 +130,48 @@ public class SecurityConfig extends WebSecurityConfigurerAdapter {
 
 CURRENT version of SecurityConfig.java (this is what fails):
 ```java
-package com.example.shop;
+package com.example.demo;
 
 import static org.springframework.security.config.Customizer.withDefaults;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.security.core.userdetails.User;
-import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.provisioning.InMemoryUserDetailsManager;
-import org.springframework.security.web.SecurityFilterChain;
 
 @Configuration
 @EnableWebSecurity
-public class SecurityConfig {
+public class SecurityConfig extends WebSecurityConfigurerAdapter {
 
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
-    @Bean
-    @Override
-    public UserDetailsService userDetailsService() {
-        return new InMemoryUserDetailsManager(
-            User.withUsername("clerk").password(passwordEncoder().encode("clerk123")).roles("CLERK").build(),
-            User.withUsername("manager").password(passwordEncoder().encode("manager123")).roles("MANAGER").build());
+    protected void configure(AuthenticationManagerBuilder auth) throws Exception {
+        auth.inMemoryAuthentication()
+            .withUser("admin").password(passwordEncoder().encode("admin123")).roles("ADMIN")
+            .and()
+            .withUser("alice").password(passwordEncoder().encode("alice123")).roles("USER");
     }
 
-    @Bean SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    /*~~(Migrate manually based on https://spring.io/blog/2022/02/21/spring-security-without-the-websecurityconfigureradapter)~~>*/@Bean
+    public AuthenticationManager authenticationManagerBean() throws Exception {
+        return super.authenticationManagerBean();
+    }
+
+    protected void configure(HttpSecurity http) throws Exception {
         http.csrf(csrf -> csrf.disable())
-                .authorizeHttpRequests(requests -> requests
-                        .requestMatchers("/actuator/health").permitAll()
-                        .requestMatchers("/whoami").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/products").hasAnyRole("CLERK", "MANAGER")
-                        .requestMatchers(HttpMethod.DELETE, "/products/**").hasRole("MANAGER")
-                        .requestMatchers("/actuator/**").hasRole("MANAGER")
-                        .anyRequest().authenticated())
-                .httpBasic(withDefaults());
-        return http.build();
+            .authorizeHttpRequests(requests -> requests
+                .requestMatchers("/public/**").permitAll()
+                .requestMatchers("/admin/**").hasRole("ADMIN")
+                .anyRequest().authenticated())
+            .httpBasic(withDefaults());
     }
 }
 
@@ -228,13 +181,14 @@ Reply with the complete corrected file in a single ```java block and nothing els
 ## Reply
 
 ```java
-package com.example.shop;
+package com.example.demo;
 
 import static org.springframework.security.config.Customizer.withDefaults;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.core.userdetails.User;
@@ -256,8 +210,9 @@ public class SecurityConfig {
     @Bean
     public UserDetailsService userDetailsService(PasswordEncoder encoder) {
         return new InMemoryUserDetailsManager(
-            User.withUsername("clerk").password(encoder.encode("clerk123")).roles("CLERK").build(),
-            User.withUsername("manager").password(encoder.encode("manager123")).roles("MANAGER").build());
+            User.withUsername("admin").password(encoder.encode("admin123")).roles("ADMIN").build(),
+            User.withUsername("alice").password(encoder.encode("alice123")).roles("USER").build()
+        );
     }
 
     @Bean
@@ -265,16 +220,14 @@ public class SecurityConfig {
         return config.getAuthenticationManager();
     }
 
-    @Bean SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http.csrf(csrf -> csrf.disable())
-                .authorizeHttpRequests(requests -> requests
-                        .requestMatchers("/actuator/health").permitAll()
-                        .requestMatchers("/whoami").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/products").hasAnyRole("CLERK", "MANAGER")
-                        .requestMatchers(HttpMethod.DELETE, "/products/**").hasRole("MANAGER")
-                        .requestMatchers("/actuator/**").hasRole("MANAGER")
-                        .anyRequest().authenticated())
-                .httpBasic(withDefaults());
+            .authorizeHttpRequests(requests -> requests
+                .requestMatchers("/public/**").permitAll()
+                .requestMatchers("/admin/**").hasRole("ADMIN")
+                .anyRequest().authenticated())
+            .httpBasic(withDefaults());
         return http.build();
     }
 }

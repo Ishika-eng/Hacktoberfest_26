@@ -58,7 +58,7 @@ Custom auto-configuration:
 Build error:
 [ERROR] COMPILATION ERROR : 
 [ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-jpa-app__qwen2.5-coder-7b-instruct__run3/src/main/java/com/example/shop/Product.java:[24,11] cannot find symbol
-[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.13.0:compile (default-compile) on project shop: Compilation failure: Compilation failure: 
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.13.0:compile (default-compile) on project shop: Compilation failure
 [ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-jpa-app__qwen2.5-coder-7b-instruct__run3/src/main/java/com/example/shop/Product.java:[24,11] cannot find symbol
 [ERROR]   symbol:   class text
 [ERROR]   location: class com.example.shop.Product

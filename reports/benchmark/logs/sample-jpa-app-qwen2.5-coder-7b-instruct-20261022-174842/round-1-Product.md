@@ -1,4 +1,4 @@
-# Round 4: Product.java
+# Round 1: Product.java
 
 Model: `qwen2.5-coder:7b-instruct`
 
@@ -58,7 +58,7 @@ Custom auto-configuration:
 Build error:
 [ERROR] COMPILATION ERROR : 
 [ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-jpa-app__qwen2.5-coder-7b-instruct__run1/src/main/java/com/example/shop/Product.java:[24,11] cannot find symbol
-[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.13.0:compile (default-compile) on project shop: Compilation failure: Compilation failure: 
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.13.0:compile (default-compile) on project shop: Compilation failure
 [ERROR] /private/var/folders/n1/80srjmy90vlc981g_j9ychzc0000gn/T/boot-upgrade-bench/migrated-sample-jpa-app__qwen2.5-coder-7b-instruct__run1/src/main/java/com/example/shop/Product.java:[24,11] cannot find symbol
 [ERROR]   symbol:   class text
 [ERROR]   location: class com.example.shop.Product
@@ -69,45 +69,6 @@ Build error:
 [ERROR] 
 [ERROR] For more information about the errors and possible solutions, please read the following articles:
 [ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
-
-A previous attempt at this file was REJECTED because it made the build worse. Do not repeat it:
-```java
-package com.example.shop;
-
-import java.math.BigDecimal;
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
-import jakarta.validation.constraints.NotBlank;
-
-@Entity
-public class Product {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
-    @NotBlank
-    private String name;
-
-    private BigDecimal price;
-
-    // long free text: a plain String column would be limited to 255 characters
-    @Column(length = 10000)
-    private String description;
-
-    public Long getId() { return id; }
-    public void setId(Long id) { this.id = id; }
-    public String getName() { return name; }
-    public void setName(String name) { this.name = name; }
-    public BigDecimal getPrice() { return price; }
-    public void setPrice(BigDecimal price) { this.price = price; }
-    public String getDescription() { return description; }
-    public void setDescription(String description) { this.description = description; }
-}
-
-```
 
 ORIGINAL Spring Boot 2.7 version of Product.java (this is the behaviour to preserve):
 ```java
