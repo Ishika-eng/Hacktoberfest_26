@@ -68,29 +68,31 @@ Measured on an Apple M3 Pro with 18 GB RAM, everything local (Ollama 0.40.3, Qwe
 | `sample-app` | **OpenRewrite + agent (Qwen2.5-Coder 7B)** | **3/3** | 11/11 each run | 45 s | 0 of 18 |
 | `sample-jpa-app` (8 tests) | OpenRewrite alone | 0/1 | does not compile | 21 s | n/a |
 | `sample-jpa-app` | **OpenRewrite + agent (Qwen2.5-Coder 7B)** | **3/3** | 8/8 each run | 51 s | 2 of 24 |
-| `spring-petclinic` (held-out) | OpenRewrite alone | 0/1 | does not compile | 187 s | n/a |
-| `spring-petclinic` (held-out) | OpenRewrite + agent (Qwen2.5-Coder 7B) | 0/1 | none ran | 255 s | n/a |
+
+The two apps we did not write are in the next section (Held-out tests).
 
 What this shows:
 
-- **OpenRewrite alone is not enough.** It converts the security rules but cannot rewrite `WebSecurityConfigurerAdapter` (it leaves a "migrate manually" marker), and on the JPA app it rewrote Hibernate's `@Type(type = "text")` into `@Type(text.class)`, which does not compile. Neither of our apps builds afterwards. On Petclinic OpenRewrite crashed outright (see below).
+- **OpenRewrite alone is not enough.** It converts the security rules but cannot rewrite `WebSecurityConfigurerAdapter` (it leaves a "migrate manually" marker), and on the JPA app it rewrote Hibernate's `@Type(type = "text")` into `@Type(text.class)`, which does not compile. Neither of our apps builds afterwards.
 - **With the agent, Qwen finishes both of our apps.** `sample-app`: all 11 tests in 45 seconds, and all 18 security checks answer the same as the Boot 2.7 build. `sample-jpa-app`: all 8 tests in 51 seconds. In both, the generated code is byte-identical in all three runs, so each is one result seen three times, not three independent samples.
 - **Green tests are not the whole story.** On `sample-jpa-app` all 8 tests pass, yet `GET /products/` changes from **200 to 404** for logged-in users (Spring 6 stopped matching trailing slashes). No test covers it. The security check reports it as "route no longer matches", separately from access being removed, and puts anything newly accessible first.
 - **The JPA pass came after a fix made while looking at these results.** Before it, Qwen failed `sample-jpa-app` 3 of 3: the model's rewrite was right but missed an import and left a stale `@Override`, so the attempt scored worse and was rolled back. The agent now repairs those slips (known imports, an `@Override` the compiler rejects) before judging an attempt, and the runs were repeated. Because the change was made after seeing the failure, the pass is not an independent test of it. The single early hand-run that passed this app before the failures is consistent with the model being able to do it.
 
 Fairness notes: the cheat sheet, import table and repairs were extended after watching models fail on these two apps, so passes measure the harness plus those hints. Three runs per cell is a small sample, and where the code is identical across runs it is really one sample. Two small apps are not your codebase.
 
-## Held-out test
+## Held-out tests
 
-Both sample apps and the cheat sheet were written by us, so they could be tuned to each other. To check, the benchmark also includes an app we did not write: the Spring team's own [spring-petclinic](https://github.com/spring-projects/spring-petclinic) at commit `a5cbb85` (Spring Boot 2.7.3, Apache-2.0), pinned and fetched on demand instead of copied into this repo. The cheat sheet was frozen before its first run, and the results are reported as they came out. Details and rules: [`agent/heldout/README.md`](agent/heldout/README.md). Petclinic has no Spring Security, so it tests the upgrade and Hibernate/JPA side, not access control.
+Both sample apps and the cheat sheet were written by us, so they could be tuned to each other. To check, we also ran apps we did not write: the Spring team's own [spring-petclinic](https://github.com/spring-projects/spring-petclinic) and [spring-petclinic-rest](https://github.com/spring-petclinic/spring-petclinic-rest) (both Apache-2.0), pinned to a commit and fetched on demand instead of copied into this repo. The cheat sheet was frozen before the first run on each. Rules and pins: [`agent/heldout/README.md`](agent/heldout/README.md).
 
-**Result on Petclinic: it fails, and the failure is informative.**
+**spring-petclinic (Boot 2.7.3; JPA, Thymeleaf, caching, Actuator, no Spring Security)**
+- *First run (agent as it was, genuinely held-out): FAIL.* OpenRewrite crashed because the project has both a `pom.xml` and a `build.gradle` and the plugin tried to download Gradle. The weak fallback then left `mysql:mysql-connector-java` (renamed in Boot 3) in the pom, so the build could not even load. The agent edits Java only, so it could not fix that.
+- *After we made the agent ignore Gradle files in a Maven project's work copy: PASS.* 41 tests ran and 40 passed, exactly as in the Boot 2 baseline, with **0 model rounds**: OpenRewrite alone was enough here, so the model was not used. **This second result is not held-out**, because we changed the agent after seeing the first failure. Report: [`reports/history/petclinic-after-gradle-fix/`](reports/history/petclinic-after-gradle-fix/run.md).
 
-1. OpenRewrite itself crashed. Petclinic has both a `pom.xml` and a `build.gradle`, and the plugin tried to download a Gradle distribution to parse the Gradle build and failed after about three minutes. The report flags this: *the built-in fallback was used, not OpenRewrite*.
-2. The weak fallback bumps the Boot version and `javax` imports but does not know that `mysql:mysql-connector-java` was renamed in Boot 3, so the upgraded `pom.xml` does not even load.
-3. The agent only edits Java files, by design, so it cannot fix a `pom.xml`. The model was still asked to "fix" three unrelated entity classes for five rounds and changed nothing. Its model-written diagnosis was right though: the `mysql-connector-java` version is missing in `pom.xml` at line 70.
+**spring-petclinic-rest (Boot 2.6.2; Spring Security, code generated from an OpenAPI file) — run once, untuned: FAIL.**
+- The original passes all 172 of its tests and OpenRewrite runs, but the upgraded build then has 100 compile errors, **all in code generated at build time** (`target/generated-sources/openapi`), because the generator is still configured to emit `javax.*`. The fix belongs in `pom.xml` (the generator's settings), not in Java sources the agent may edit, so the agent stopped without calling the model and flagged it for a human.
+- The report's model-written diagnosis was **wrong**: it suggested adding `javax.validation` dependencies instead of reconfiguring the generator. That is why diagnoses are labelled unverified. Report: [`reports/history/second-heldout-petclinic-rest/`](reports/history/second-heldout-petclinic-rest/run.md).
 
-This was one Qwen run (two more were planned and not done). Following the rules in `agent/heldout/README.md`, the cheat sheet was frozen before this run and the result is reported as it came out. Fixing the causes (ignore Gradle files for OpenRewrite in a Maven build, stop spending model rounds on build-file errors, handle renamed dependencies) would be a change made after seeing this app, so any later Petclinic result must be labelled as no longer held-out.
+**What this says about unseen code:** one of the two apps upgrades (without needing the model), and the other fails for a reason outside what the agent is allowed to change. On unseen code the agent's value so far is that it **verifies** the result and **fails safely**, not that the model generalises. We have no evidence yet that the model fixes code it was not tuned on.
 
 ## Safety
 
@@ -172,9 +174,10 @@ python3 agent/migrate.py heldout/spring-petclinic --endpoints agent/heldout/spri
 
 ## Limitations
 
-- Two small sample apps of our own plus one held-out app that the agent currently fails. Results on your codebase will differ.
+- Two small sample apps of our own, plus two apps we did not write: one upgrades with OpenRewrite alone (no model needed) and one fails. Results on your codebase will differ.
+- Code generated at build time (for example from an OpenAPI file) and build-file problems (`pom.xml`, generator settings, renamed dependencies) are outside what the agent may edit; it stops and flags them.
 - **OpenRewrite caveats we hit:** it cannot rewrite `WebSecurityConfigurerAdapter`; it can emit code that does not compile (`@Type(text.class)`); it silently does nothing in a folder that `.gitignore` ignores (the agent now warns and works outside the repo); it crashes on projects that have both Maven and Gradle files; it needs the project to compile before it starts; and it does not check behaviour.
-- The agent cannot edit build files. A `pom.xml` problem is flagged for a human, but the loop currently still spends model rounds on unrelated Java files first.
+- The agent cannot edit build files. A `pom.xml` problem is flagged for a human; if the errors name no editable source file the agent stops, but a build-file error that coexists with unrelated Java files can still cost model rounds.
 - The score counts compile errors, so a good rewrite that trades one error for a different one can still be rolled back unless the deterministic repairs cover the slip. They cover imports and stale `@Override` only.
 - The 7B model works on the common Spring Security rewrite and not reliably on the rest. A failed run is expected, which is why every failure is reported and flagged.
 - The cheat sheet and import table were extended after watching models fail on our sample apps, so pass rates measure the harness plus those hints, not unaided models.

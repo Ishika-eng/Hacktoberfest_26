@@ -36,6 +36,8 @@ How to read it:
 What the rows show:
 - **`sample-app`**: Qwen passes 3 of 3 with one model round, and writes byte-identical code each time (same fingerprint), so these are one result seen three times, not three independent samples. All 18 security checks answer the same as the Boot 2.7 build.
 - **`sample-jpa-app`**: Qwen passes 3 of 3, again with identical code each time. The model rewrites `Product.java`; the agent's own repairs add the missing import and drop the stale `@Override`. All 8 tests are green, yet 2 of 24 security checks differ: `GET /products/` goes from 200 to 404 for logged-in users, because Spring 6 no longer matches a trailing slash. No test covers it.
-- **Petclinic (held-out)**: OpenRewrite crashed on the project's Gradle files, so the weak built-in fallback ran (flagged above). The build then fails on `mysql:mysql-connector-java`, a `pom.xml` problem the agent cannot edit, and the model's rounds on unrelated Java files changed nothing.
+- **Petclinic (first run, agent `7c80c4c`)**: OpenRewrite crashed on the project's Gradle files, so the weak built-in fallback ran (flagged above). The build then fails on `mysql:mysql-connector-java`, a `pom.xml` problem the agent cannot edit, and the model's rounds on unrelated Java files changed nothing.
+
+The two unseen apps have their own reports outside this table: after the agent was changed to ignore Gradle files, spring-petclinic passes with OpenRewrite alone (0 model rounds; no longer held-out), and spring-petclinic-rest, run once untuned, fails on build-time generated `javax` code. See the README's *Held-out tests* and `reports/history/`.
 
 Reproduce: `python3 agent/bench.py` (needs Ollama with the models pulled, JDK 17+, Maven).
